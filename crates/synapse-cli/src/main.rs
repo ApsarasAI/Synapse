@@ -2,6 +2,8 @@ use std::net::SocketAddr;
 
 use clap::{Parser, Subcommand};
 
+mod doctor;
+
 #[derive(Debug, Parser)]
 #[command(name = "synapse", about = "AI code execution sandbox")]
 struct Cli {
@@ -19,7 +21,7 @@ enum Commands {
     },
     /// Runtime related commands (placeholder)
     Runtime,
-    /// Check system requirements (placeholder)
+    /// Check system requirements for the MVP sandbox
     Doctor,
 }
 
@@ -27,15 +29,9 @@ enum Commands {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Serve { listen } => {
-            synapse_api::server::serve(listen).await?;
-        }
-        Commands::Runtime => {
-            println!("runtime commands are not implemented yet");
-        }
-        Commands::Doctor => {
-            println!("doctor command is not implemented yet");
-        }
+        Commands::Serve { listen } => synapse_api::server::serve(listen).await?,
+        Commands::Runtime => println!("runtime commands are not implemented yet"),
+        Commands::Doctor => doctor::run()?,
     }
     Ok(())
 }

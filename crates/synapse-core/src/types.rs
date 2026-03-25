@@ -19,12 +19,12 @@ pub struct ExecuteResponse {
 }
 
 impl ExecuteResponse {
-    pub fn mock_ok() -> Self {
+    pub fn error(stderr: impl Into<String>, duration_ms: u64) -> Self {
         Self {
-            stdout: "synapse initialized".to_string(),
-            stderr: String::new(),
-            exit_code: 0,
-            duration_ms: 1,
+            stdout: String::new(),
+            stderr: stderr.into(),
+            exit_code: -1,
+            duration_ms,
         }
     }
 }
