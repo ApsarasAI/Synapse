@@ -31,7 +31,8 @@ pub use providers::{find_command, temp_path, Providers, SystemProviders};
 #[cfg(target_os = "linux")]
 pub use runtime::probe_linux_sandbox_support;
 pub use runtimes::{
-    InstalledRuntime, ResolvedRuntime, RuntimeInfo, RuntimeManifest, RuntimeRegistry,
+    BootstrapRuntimeResult, InstalledRuntime, ResolvedRuntime, RuntimeInfo, RuntimeInstallSource,
+    RuntimeManifest, RuntimeRegistry,
 };
 pub use scheduler::{
     ExecutionPermit, ExecutionScheduler, ExecutionSchedulerConfig, SchedulerMetrics,

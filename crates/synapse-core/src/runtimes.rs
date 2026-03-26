@@ -12,9 +12,19 @@ use sha2::{Digest, Sha256};
 use crate::{find_command, Providers, SynapseError, SystemProviders};
 
 const RUNTIME_STORE_ENV: &str = "SYNAPSE_RUNTIME_STORE_DIR";
+const RUNTIME_BUNDLE_DIR_ENV: &str = "SYNAPSE_RUNTIME_BUNDLE_DIR";
 const DEFAULT_RUNTIME_STORE_DIR: &str = "synapse-runtime-store";
 const SUPPORTED_PYTHON_LANGUAGE: &str = "python";
 const DEFAULT_PYTHON_COMMAND: &str = "python3";
+const DEFAULT_BUNDLE_VERSION: &str = "bundle";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeInstallSource {
+    Manual,
+    Bundle,
+    HostImport,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeInfo {
@@ -38,6 +48,8 @@ pub struct RuntimeManifest {
     pub command: String,
     pub binary_path: String,
     pub sha256: String,
+    #[serde(default = "default_runtime_install_source")]
+    pub install_source: RuntimeInstallSource,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installed_from: Option<String>,
 }
@@ -51,6 +63,14 @@ pub struct InstalledRuntime {
     pub healthy: bool,
     pub binary: PathBuf,
     pub sha256: String,
+    pub install_source: RuntimeInstallSource,
+    pub installed_from: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapRuntimeResult {
+    pub runtime: InstalledRuntime,
+    pub source: RuntimeInstallSource,
 }
 
 #[derive(Debug, Clone)]
@@ -136,6 +156,8 @@ impl RuntimeRegistry {
                     healthy,
                     binary,
                     sha256: manifest.sha256,
+                    install_source: manifest.install_source,
+                    installed_from: manifest.installed_from,
                 });
             }
         }
@@ -179,6 +201,8 @@ impl RuntimeRegistry {
             healthy: true,
             binary,
             sha256: manifest.sha256,
+            install_source: manifest.install_source,
+            installed_from: manifest.installed_from,
         })
     }
 
@@ -187,6 +211,16 @@ impl RuntimeRegistry {
         language: &str,
         version: &str,
         source_path: &Path,
+    ) -> Result<InstalledRuntime, SynapseError> {
+        self.install_with_source(language, version, source_path, RuntimeInstallSource::Manual)
+    }
+
+    fn install_with_source(
+        &self,
+        language: &str,
+        version: &str,
+        source_path: &Path,
+        install_source: RuntimeInstallSource,
     ) -> Result<InstalledRuntime, SynapseError> {
         let normalized = normalize_language(language)?;
         let version = normalized_version(version)?;
@@ -211,6 +245,7 @@ impl RuntimeRegistry {
             command: command.clone(),
             binary_path: stored_binary_name,
             sha256: sha256_file(&stored_binary)?,
+            install_source,
             installed_from: Some(source_record.display().to_string()),
         };
         self.write_manifest(&manifest)?;
@@ -224,6 +259,71 @@ impl RuntimeRegistry {
             healthy: true,
             binary: stored_binary,
             sha256: manifest.sha256,
+            install_source: manifest.install_source,
+            installed_from: manifest.installed_from,
+        })
+    }
+
+    pub fn install_bundle(&self, bundle_dir: &Path) -> Result<InstalledRuntime, SynapseError> {
+        if !bundle_dir.is_dir() {
+            return Err(SynapseError::RuntimeUnavailable(format!(
+                "runtime bundle {} does not exist",
+                bundle_dir.display()
+            )));
+        }
+
+        let bundle_manifest_path = bundle_dir.join("manifest.json");
+        let bytes = fs::read(&bundle_manifest_path)?;
+        let bundle_manifest: RuntimeManifest = serde_json::from_slice(&bytes).map_err(|error| {
+            SynapseError::RuntimeUnavailable(format!(
+                "runtime manifest {} is invalid: {error}",
+                bundle_manifest_path.display()
+            ))
+        })?;
+
+        let language = normalize_language(&bundle_manifest.language)?;
+        let version = normalized_version(&bundle_manifest.version)?;
+        let command = normalized_component("runtime command", &bundle_manifest.command)?;
+        let bundle_binary = manifest_binary_path(bundle_dir, &bundle_manifest)?;
+
+        validate_manifest_binary(&bundle_manifest, &bundle_binary)?;
+
+        let source_record = canonicalize_path(bundle_dir)?;
+        let runtime_dir = self.runtime_dir(&language, &version);
+        fs::create_dir_all(&runtime_dir)?;
+        let stored_binary = runtime_dir.join(&bundle_manifest.binary_path);
+        copy_runtime_binary(&bundle_binary, &stored_binary)?;
+
+        let stored_sha256 = sha256_file(&stored_binary)?;
+        if stored_sha256 != bundle_manifest.sha256 {
+            return Err(SynapseError::RuntimeUnavailable(format!(
+                "runtime {}:{} failed copy integrity check",
+                language, version
+            )));
+        }
+
+        let manifest = RuntimeManifest {
+            language: language.clone(),
+            version: version.clone(),
+            command,
+            binary_path: bundle_manifest.binary_path,
+            sha256: stored_sha256,
+            install_source: RuntimeInstallSource::Bundle,
+            installed_from: Some(source_record.display().to_string()),
+        };
+        self.write_manifest(&manifest)?;
+
+        let active = self.active_version(&language)?.as_deref() == Some(version.as_str());
+        Ok(InstalledRuntime {
+            language: manifest.language,
+            version: manifest.version,
+            command: manifest.command,
+            active,
+            healthy: true,
+            binary: stored_binary,
+            sha256: manifest.sha256,
+            install_source: manifest.install_source,
+            installed_from: manifest.installed_from,
         })
     }
 
@@ -252,6 +352,8 @@ impl RuntimeRegistry {
             healthy,
             binary,
             sha256: manifest.sha256,
+            install_source: manifest.install_source,
+            installed_from: manifest.installed_from,
         })
     }
 
@@ -269,7 +371,12 @@ impl RuntimeRegistry {
             )));
         };
 
-        let installed = self.install(language, version, &source_path)?;
+        let installed = self.install_with_source(
+            language,
+            version,
+            &source_path,
+            RuntimeInstallSource::HostImport,
+        )?;
         if activate {
             self.activate(language, version)
         } else {
@@ -277,14 +384,49 @@ impl RuntimeRegistry {
         }
     }
 
-    pub fn bootstrap_system_defaults(&self) -> Result<(), SynapseError> {
-        self.import_host_runtime(
-            &SystemProviders,
+    pub fn ensure_default_runtime(
+        &self,
+        providers: &dyn Providers,
+    ) -> Result<BootstrapRuntimeResult, SynapseError> {
+        if let Ok(runtime) = self.verify(SUPPORTED_PYTHON_LANGUAGE, None) {
+            return Ok(BootstrapRuntimeResult {
+                source: runtime.install_source.clone(),
+                runtime,
+            });
+        }
+
+        if let Some(bundle_dir) = default_runtime_bundle_dir(providers) {
+            match self.install_bundle(&bundle_dir) {
+                Ok(bundle_runtime) => {
+                    let runtime =
+                        self.activate(&bundle_runtime.language, &bundle_runtime.version)?;
+                    return Ok(BootstrapRuntimeResult {
+                        source: RuntimeInstallSource::Bundle,
+                        runtime,
+                    });
+                }
+                Err(error) if bundle_dir.join("manifest.json").is_file() => {
+                    return Err(error);
+                }
+                Err(_) => {}
+            }
+        }
+
+        let runtime = self.import_host_runtime(
+            providers,
             SUPPORTED_PYTHON_LANGUAGE,
             "system",
             DEFAULT_PYTHON_COMMAND,
             true,
         )?;
+        Ok(BootstrapRuntimeResult {
+            source: RuntimeInstallSource::HostImport,
+            runtime,
+        })
+    }
+
+    pub fn bootstrap_system_defaults(&self) -> Result<(), SynapseError> {
+        self.ensure_default_runtime(&SystemProviders)?;
         Ok(())
     }
 
@@ -347,6 +489,31 @@ fn runtime_store_root(providers: &dyn Providers) -> PathBuf {
         .env_var(RUNTIME_STORE_ENV)
         .map(PathBuf::from)
         .unwrap_or_else(|| providers.temp_dir().join(DEFAULT_RUNTIME_STORE_DIR))
+}
+
+fn default_runtime_bundle_dir(providers: &dyn Providers) -> Option<PathBuf> {
+    if let Some(path) = providers.env_var(RUNTIME_BUNDLE_DIR_ENV) {
+        return Some(PathBuf::from(path));
+    }
+
+    let cwd = std::env::current_dir().ok()?;
+    let direct = cwd.join("runtime-bundles/python");
+    if direct.is_dir() {
+        return Some(direct);
+    }
+
+    let nested = cwd
+        .join("runtime-bundles/python")
+        .join(DEFAULT_BUNDLE_VERSION);
+    if nested.is_dir() {
+        return Some(nested);
+    }
+
+    None
+}
+
+fn default_runtime_install_source() -> RuntimeInstallSource {
+    RuntimeInstallSource::Manual
 }
 
 fn normalize_language(language: &str) -> Result<String, SynapseError> {
@@ -498,9 +665,14 @@ fn sha256_file(path: &Path) -> Result<String, SynapseError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{manifest_binary_path, RuntimeManifest, RuntimeRegistry};
+    use super::{
+        manifest_binary_path, sha256_file, RuntimeInstallSource, RuntimeManifest, RuntimeRegistry,
+    };
     use crate::SynapseError;
-    use std::{env, fs, path::PathBuf};
+    use std::{
+        env, fs,
+        path::{Path, PathBuf},
+    };
 
     fn unique_root(prefix: &str) -> PathBuf {
         let path = env::temp_dir().join(format!(
@@ -526,6 +698,27 @@ mod tests {
             fs::set_permissions(&path, permissions).unwrap();
         }
         path
+    }
+
+    fn fake_runtime_bundle(root: &Path, version: &str) -> PathBuf {
+        let bundle_dir = root.join(format!("bundle-{version}"));
+        fs::create_dir_all(&bundle_dir).unwrap();
+        let binary = fake_runtime_binary(&bundle_dir, "python3");
+        let manifest = RuntimeManifest {
+            language: "python".to_string(),
+            version: version.to_string(),
+            command: "python3".to_string(),
+            binary_path: "python3".to_string(),
+            sha256: sha256_file(&binary).unwrap(),
+            install_source: RuntimeInstallSource::Bundle,
+            installed_from: None,
+        };
+        fs::write(
+            bundle_dir.join("manifest.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        bundle_dir
     }
 
     #[test]
@@ -626,6 +819,7 @@ mod tests {
             command: "python3".to_string(),
             binary_path: "/usr/bin/python3".to_string(),
             sha256: "deadbeef".to_string(),
+            install_source: RuntimeInstallSource::Manual,
             installed_from: None,
         };
 
@@ -669,6 +863,52 @@ mod tests {
         assert_eq!(runtime.version, "3.12.3");
         assert!(runtime.active);
         assert!(runtime.healthy);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn registry_installs_runtime_from_bundle() {
+        let root = unique_root("synapse-runtime-registry-bundle");
+        let registry = RuntimeRegistry::from_root(&root);
+        let bundle = fake_runtime_bundle(&root, "3.12.4");
+
+        let installed = registry.install_bundle(&bundle).unwrap();
+        assert_eq!(installed.language, "python");
+        assert_eq!(installed.version, "3.12.4");
+        assert_eq!(installed.command, "python3");
+        assert!(!installed.active);
+        assert!(installed
+            .binary
+            .starts_with(root.join("runtimes/python/3.12.4")));
+
+        registry.activate("python", "3.12.4").unwrap();
+        let resolved = registry.resolve("python", None).unwrap();
+        assert_eq!(resolved.info.resolved_version, "3.12.4");
+        assert!(resolved.binary.ends_with("python3"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn registry_rejects_bundle_with_hash_mismatch() {
+        let root = unique_root("synapse-runtime-registry-bundle-corrupt");
+        let registry = RuntimeRegistry::from_root(&root);
+        let bundle = fake_runtime_bundle(&root, "3.12.5");
+        let manifest_path = bundle.join("manifest.json");
+        let mut manifest: RuntimeManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest.sha256 = "deadbeef".to_string();
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let error = registry.install_bundle(&bundle).unwrap_err();
+        assert!(
+            matches!(error, SynapseError::RuntimeUnavailable(message) if message.contains("integrity check"))
+        );
 
         let _ = fs::remove_dir_all(root);
     }
