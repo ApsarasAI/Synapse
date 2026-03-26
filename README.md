@@ -78,8 +78,8 @@ synapse --help
 
 Release artifacts are intended to include:
 
-- `synapse-linux-x86_64.tar.gz`
-- `synapse-linux-x86_64.sha256`
+- `synapse-linux-x86_64-musl.tar.gz`
+- `synapse-linux-x86_64-musl.sha256`
 - release notes with a change summary
 
 See [docs/release-process.md](docs/release-process.md) for the expected release workflow.

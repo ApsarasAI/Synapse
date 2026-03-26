@@ -15,23 +15,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
 
       - name: Build release binary
-        run: cargo build --release -p synapse-cli --bin synapse
+        run: cargo build --release --target x86_64-unknown-linux-musl -p synapse-cli --bin synapse
 
       - name: Package artifacts
         run: |
           mkdir -p dist
-          cp target/release/synapse dist/synapse
-          tar -C dist -czf dist/synapse-linux-x86_64.tar.gz synapse
-          sha256sum dist/synapse-linux-x86_64.tar.gz > dist/synapse-linux-x86_64.sha256
+          cp target/x86_64-unknown-linux-musl/release/synapse dist/synapse
+          tar -C dist -czf dist/synapse-linux-x86_64-musl.tar.gz synapse
+          (
+            cd dist
+            sha256sum synapse-linux-x86_64-musl.tar.gz > synapse-linux-x86_64-musl.sha256
+          )
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/synapse-linux-x86_64.tar.gz
-            dist/synapse-linux-x86_64.sha256
+            dist/synapse-linux-x86_64-musl.tar.gz
+            dist/synapse-linux-x86_64-musl.sha256
           generate_release_notes: true

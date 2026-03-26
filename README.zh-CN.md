@@ -78,8 +78,8 @@ synapse --help
 
 预期 Release 附件：
 
-- `synapse-linux-x86_64.tar.gz`
-- `synapse-linux-x86_64.sha256`
+- `synapse-linux-x86_64-musl.tar.gz`
+- `synapse-linux-x86_64-musl.sha256`
 - 变更摘要
 
 发布流程见 [docs/release-process.md](docs/release-process.md)。

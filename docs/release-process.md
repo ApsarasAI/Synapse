@@ -12,8 +12,8 @@ Synapse uses GitHub Releases as the official distribution channel for the develo
 
 Each GitHub Release should attach:
 
-- `synapse-linux-x86_64.tar.gz`
-- `synapse-linux-x86_64.sha256`
+- `synapse-linux-x86_64-musl.tar.gz`
+- `synapse-linux-x86_64-musl.sha256`
 - release notes with a concise change summary
 
 The tarball should contain the `synapse` binary built from `crates/synapse-cli`.
@@ -43,7 +43,7 @@ scripts/quickstart_smoke.sh
 End users should verify the checksum before using a release binary:
 
 ```bash
-sha256sum -c synapse-linux-x86_64.sha256
+sha256sum -c synapse-linux-x86_64-musl.sha256
 ```
 
 ## Preview Caveat
