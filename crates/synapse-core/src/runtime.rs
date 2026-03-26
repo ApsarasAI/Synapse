@@ -15,9 +15,11 @@ use tokio::{
     fs,
     io::{AsyncRead, AsyncReadExt},
     process::Command,
-    time::timeout,
+    time::sleep,
 };
 
+#[cfg(target_os = "linux")]
+use crate::cgroups::ExecutionCgroup;
 #[cfg(target_os = "linux")]
 use crate::seccomp::{self, ExportedSeccompFilter};
 use crate::{find_command, temp_path, ExecuteResponse, SynapseError, SystemProviders};
@@ -26,10 +28,17 @@ const OUTPUT_LIMIT_BYTES: usize = 1024 * 1024;
 const MINIMAL_PATH: &str = "/usr/bin:/bin";
 const SANDBOX_WORKDIR: &str = "/workspace";
 const SANDBOX_SCRIPT_PATH: &str = "/workspace/main.py";
+const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Debug)]
 pub struct PreparedSandbox {
     root: PathBuf,
+}
+
+#[derive(Debug)]
+struct OutputCapture {
+    content: String,
+    truncated: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -88,7 +97,8 @@ pub(crate) async fn execute_binary(
     binary: &Path,
     code: &str,
     sandbox_dir: &Path,
-    timeout_ms: u64,
+    wall_timeout_ms: u64,
+    cpu_time_limit_ms: u64,
     memory_limit_mb: u32,
 ) -> Result<ExecuteResponse, SynapseError> {
     let script_path = sandbox_dir.join("main.py");
@@ -97,7 +107,8 @@ pub(crate) async fn execute_binary(
         binary,
         &script_path,
         sandbox_dir,
-        timeout_ms,
+        wall_timeout_ms,
+        cpu_time_limit_ms,
         memory_limit_mb,
     )
     .await
@@ -161,11 +172,20 @@ async fn run_process(
     binary: &Path,
     script_path: &Path,
     sandbox_dir: &Path,
-    timeout_ms: u64,
+    wall_timeout_ms: u64,
+    cpu_time_limit_ms: u64,
     memory_limit_mb: u32,
 ) -> Result<ExecuteResponse, SynapseError> {
     let started = Instant::now();
     let strategy = sandbox_strategy()?;
+    #[cfg(target_os = "linux")]
+    let execution_cgroup = ExecutionCgroup::try_create(&SystemProviders, memory_limit_mb)?;
+    #[cfg(target_os = "linux")]
+    require_cpu_limit_support(
+        cpu_time_limit_ms,
+        wall_timeout_ms,
+        execution_cgroup.is_some(),
+    )?;
     #[cfg(target_os = "linux")]
     let seccomp_plan = prepare_seccomp(&strategy, sandbox_dir)?;
     let mut command = build_command(
@@ -199,6 +219,17 @@ async fn run_process(
 
     let mut child = command.spawn()?;
     #[cfg(target_os = "linux")]
+    if let Some(execution_cgroup) = execution_cgroup.as_ref() {
+        let pid = child.id().ok_or_else(|| {
+            SynapseError::Execution("failed to read spawned process id".to_string())
+        })?;
+        if let Err(error) = execution_cgroup.attach(pid) {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(error);
+        }
+    }
+    #[cfg(target_os = "linux")]
     drop(seccomp_plan);
     let stdout = child
         .stdout
@@ -212,41 +243,113 @@ async fn run_process(
     let stdout_task = tokio::spawn(read_stream(stdout));
     let stderr_task = tokio::spawn(read_stream(stderr));
 
-    let wait_result = timeout(Duration::from_millis(timeout_ms), child.wait()).await;
+    let wait_result = wait_for_process(
+        &mut child,
+        wall_timeout_ms,
+        cpu_time_limit_ms,
+        #[cfg(target_os = "linux")]
+        execution_cgroup.as_ref(),
+    )
+    .await?;
     let duration_ms = elapsed_ms(started);
 
     match wait_result {
-        Ok(status) => {
-            let status = status?;
+        ProcessOutcome::Exited(status) => {
             let stdout = collect_output(stdout_task).await?;
             let stderr = collect_output(stderr_task).await?;
+            let output = output_summary(&stdout, &stderr);
+            let memory_limit_exceeded = memory_limit_exceeded(
+                &stderr.content,
+                #[cfg(target_os = "linux")]
+                execution_cgroup.as_ref(),
+            )?;
 
             Ok(ExecuteResponse {
-                stdout,
-                stderr,
-                exit_code: status.code().unwrap_or(-1),
+                stdout: stdout.content,
+                stderr: if memory_limit_exceeded {
+                    append_limit_message(stderr.content, "memory limit exceeded")
+                } else {
+                    stderr.content
+                },
+                exit_code: if memory_limit_exceeded {
+                    -1
+                } else {
+                    status.code().unwrap_or(-1)
+                },
                 duration_ms,
+                request_id: None,
+                tenant_id: None,
+                runtime: None,
+                limits: None,
+                output: Some(output),
+                error: if memory_limit_exceeded {
+                    Some(SynapseError::MemoryLimitExceeded.to_execute_error())
+                } else {
+                    None
+                },
+                audit: None,
             })
         }
-        Err(_) => {
+        ProcessOutcome::WallTimeout => {
             let _ = child.kill().await;
             let _ = child.wait().await;
 
             let stdout = collect_output(stdout_task).await?;
-            let mut stderr = collect_output(stderr_task).await?;
-            if !stderr.is_empty() {
-                stderr.push('\n');
-            }
-            stderr.push_str("execution timed out");
+            let stderr = collect_output(stderr_task).await?;
+            let output = output_summary(&stdout, &stderr);
 
             Ok(ExecuteResponse {
-                stdout,
-                stderr,
+                stdout: stdout.content,
+                stderr: append_limit_message(stderr.content, "execution timed out"),
                 exit_code: -1,
                 duration_ms,
+                request_id: None,
+                tenant_id: None,
+                runtime: None,
+                limits: None,
+                output: Some(output),
+                error: Some(SynapseError::WallTimeout.to_execute_error()),
+                audit: None,
+            })
+        }
+        ProcessOutcome::CpuTimeLimitExceeded => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+
+            let stdout = collect_output(stdout_task).await?;
+            let stderr = collect_output(stderr_task).await?;
+            let output = output_summary(&stdout, &stderr);
+
+            Ok(ExecuteResponse {
+                stdout: stdout.content,
+                stderr: append_limit_message(stderr.content, "cpu time limit exceeded"),
+                exit_code: -1,
+                duration_ms,
+                request_id: None,
+                tenant_id: None,
+                runtime: None,
+                limits: None,
+                output: Some(output),
+                error: Some(SynapseError::CpuTimeLimitExceeded.to_execute_error()),
+                audit: None,
             })
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn require_cpu_limit_support(
+    cpu_time_limit_ms: u64,
+    wall_timeout_ms: u64,
+    cgroup_available: bool,
+) -> Result<(), SynapseError> {
+    if cgroup_available || cpu_time_limit_ms >= wall_timeout_ms {
+        return Ok(());
+    }
+
+    Err(SynapseError::RuntimeUnavailable(
+        "cpu_time_limit_ms below timeout_ms requires cgroups v2 support".to_string(),
+    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -417,9 +520,72 @@ fn bubblewrap_base_args() -> Vec<OsString> {
     .collect()
 }
 
+#[derive(Debug)]
+enum ProcessOutcome {
+    Exited(std::process::ExitStatus),
+    WallTimeout,
+    CpuTimeLimitExceeded,
+}
+
+async fn wait_for_process(
+    child: &mut tokio::process::Child,
+    wall_timeout_ms: u64,
+    cpu_time_limit_ms: u64,
+    #[cfg(target_os = "linux")] execution_cgroup: Option<&ExecutionCgroup>,
+) -> Result<ProcessOutcome, SynapseError> {
+    let started = Instant::now();
+    let timeout = Duration::from_millis(wall_timeout_ms);
+    #[cfg(target_os = "linux")]
+    let starting_cpu_usage_usec = match execution_cgroup {
+        Some(execution_cgroup) => Some(execution_cgroup.cpu_usage_usec()?),
+        None => None,
+    };
+
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(ProcessOutcome::Exited(status));
+        }
+
+        if started.elapsed() >= timeout {
+            return Ok(ProcessOutcome::WallTimeout);
+        }
+
+        #[cfg(target_os = "linux")]
+        if let (Some(execution_cgroup), Some(starting_cpu_usage_usec)) =
+            (execution_cgroup, starting_cpu_usage_usec)
+        {
+            let current_cpu_usage_usec = execution_cgroup.cpu_usage_usec()?;
+            if current_cpu_usage_usec.saturating_sub(starting_cpu_usage_usec)
+                >= cpu_time_limit_usec(cpu_time_limit_ms)
+            {
+                return Ok(ProcessOutcome::CpuTimeLimitExceeded);
+            }
+        }
+
+        sleep(process_poll_interval(started, timeout)).await;
+    }
+}
+
+fn process_poll_interval(started: Instant, timeout: Duration) -> Duration {
+    let remaining = timeout.saturating_sub(started.elapsed());
+    remaining.min(PROCESS_POLL_INTERVAL)
+}
+
+fn append_limit_message(mut stderr: String, message: &str) -> String {
+    if !stderr.is_empty() {
+        stderr.push('\n');
+    }
+    stderr.push_str(message);
+    stderr
+}
+
+#[cfg(target_os = "linux")]
+fn cpu_time_limit_usec(timeout_ms: u64) -> u64 {
+    timeout_ms.saturating_mul(1_000)
+}
 async fn collect_output(
     task: tokio::task::JoinHandle<Result<Vec<u8>, std::io::Error>>,
-) -> Result<String, SynapseError> {
+) -> Result<OutputCapture, SynapseError> {
     let bytes = task.await.map_err(|err| {
         SynapseError::Execution(format!("failed to collect process output: {err}"))
     })??;
@@ -526,7 +692,7 @@ fn elapsed_ms(started: Instant) -> u64 {
     millis.min(u128::from(u64::MAX)) as u64
 }
 
-fn truncate_output(bytes: &[u8]) -> String {
+fn truncate_output(bytes: &[u8]) -> OutputCapture {
     let truncated = bytes.len() > OUTPUT_LIMIT_BYTES;
     let slice = if truncated {
         &bytes[..OUTPUT_LIMIT_BYTES]
@@ -538,7 +704,36 @@ fn truncate_output(bytes: &[u8]) -> String {
     if truncated {
         output.push_str("\n[output truncated]");
     }
-    output
+    OutputCapture {
+        content: output,
+        truncated,
+    }
+}
+
+fn output_summary(stdout: &OutputCapture, stderr: &OutputCapture) -> crate::OutputSummary {
+    crate::OutputSummary {
+        stdout_truncated: stdout.truncated,
+        stderr_truncated: stderr.truncated,
+    }
+}
+
+fn memory_limit_exceeded(
+    stderr: &str,
+    #[cfg(target_os = "linux")] execution_cgroup: Option<&ExecutionCgroup>,
+) -> Result<bool, SynapseError> {
+    if stderr.contains("MemoryError") {
+        return Ok(true);
+    }
+
+    #[cfg(target_os = "linux")]
+    if let Some(execution_cgroup) = execution_cgroup {
+        let events = execution_cgroup.memory_events()?;
+        if events.oom > 0 || events.oom_kill > 0 {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 fn resolve_binary(binary: &str) -> Result<PathBuf, SynapseError> {
@@ -564,10 +759,13 @@ fn canonicalize_binary(path: &Path) -> Result<PathBuf, SynapseError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_sandbox_dir_blocking, destroy_sandbox_dir_blocking, memory_limit_bytes,
-        recreate_sandbox_dir_blocking, truncate_output, write_script, OUTPUT_LIMIT_BYTES,
+        append_limit_message, create_sandbox_dir_blocking, destroy_sandbox_dir_blocking,
+        memory_limit_bytes, memory_limit_exceeded, output_summary, recreate_sandbox_dir_blocking,
+        truncate_output, write_script, OutputCapture, OUTPUT_LIMIT_BYTES,
     };
-    use crate::SynapseError;
+    #[cfg(target_os = "linux")]
+    use super::{cpu_time_limit_usec, require_cpu_limit_support};
+    use crate::{OutputSummary, SynapseError};
     use std::{
         env, fs,
         path::PathBuf,
@@ -587,16 +785,51 @@ mod tests {
         let input = vec![b'a'; OUTPUT_LIMIT_BYTES + 1];
         let output = truncate_output(&input);
 
-        assert!(output.ends_with("\n[output truncated]"));
+        assert!(output.content.ends_with("\n[output truncated]"));
+        assert!(output.truncated);
         assert_eq!(
-            output.len(),
+            output.content.len(),
             OUTPUT_LIMIT_BYTES + "\n[output truncated]".len()
         );
     }
 
     #[test]
     fn truncate_output_preserves_small_streams() {
-        assert_eq!(truncate_output(b"hello"), "hello");
+        let output = truncate_output(b"hello");
+        assert_eq!(output.content, "hello");
+        assert!(!output.truncated);
+    }
+
+    #[test]
+    fn output_summary_reports_truncation_per_stream() {
+        let summary = output_summary(
+            &OutputCapture {
+                content: "stdout".to_string(),
+                truncated: true,
+            },
+            &OutputCapture {
+                content: "stderr".to_string(),
+                truncated: false,
+            },
+        );
+
+        assert_eq!(
+            summary,
+            OutputSummary {
+                stdout_truncated: true,
+                stderr_truncated: false,
+            }
+        );
+    }
+
+    #[test]
+    fn memory_limit_exceeded_detects_memory_error_traceback() {
+        assert!(memory_limit_exceeded(
+            "Traceback (most recent call last):\nMemoryError\n",
+            #[cfg(target_os = "linux")]
+            None,
+        )
+        .unwrap());
     }
 
     #[test]
@@ -616,6 +849,13 @@ mod tests {
         } else {
             assert!(result.is_ok());
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cpu_limits_require_cgroup_support_when_more_strict_than_wall_timeout() {
+        let error = require_cpu_limit_support(50, 500, false).unwrap_err();
+        assert!(matches!(error, SynapseError::RuntimeUnavailable(_)));
     }
 
     #[test]
@@ -644,5 +884,19 @@ mod tests {
         assert_eq!(contents, "print(42)\n");
 
         let _ = destroy_sandbox_dir_blocking(&path);
+    }
+
+    #[test]
+    fn append_limit_message_appends_after_existing_stderr() {
+        assert_eq!(
+            append_limit_message("traceback".to_string(), "execution timed out"),
+            "traceback\nexecution timed out"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cpu_time_limit_usec_matches_timeout_budget() {
+        assert_eq!(cpu_time_limit_usec(250), 250_000);
     }
 }

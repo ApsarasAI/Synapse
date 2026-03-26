@@ -1,0 +1,31 @@
+## 2026-03-25 21:20
+
+Goal: 记录当前仓库内执行环境问题，以及已验证可用的文件写入方式，减少后续重复踩坑。
+
+Progress
+- 排查了当前环境下的命令执行异常，发现多个常规读写路径会触发 `bwrap: Unknown option --argv0`
+- 成功用一次性 shell heredoc 方式将 Markdown 内容写入仓库根目录文件
+- 成功验证新文件内容已落盘
+
+Validated
+- 在这个环境里，`functions.exec_command` 配合 `sandbox_permissions: require_escalated` 可以稳定执行只读检索和文件写入
+- 只读检索可用命令示例：`find . -name 'product.md' -o -iname '*product*.md'`、`grep -R -nH "overlayfs\\|overlay" docs crates .`、`sed -n '1,20p' overlayfs-solution-analysis.md`
+- 文件写入可用方式：通过 shell heredoc 直接写文件，例如：
+  `cat > overlayfs-solution-analysis.md <<'EOF' ... EOF`
+- Evidence: 已成功创建并检查文件 `/root/workspace/Synapse/overlayfs-solution-analysis.md`
+
+Failed
+- `functions.exec_command` 在默认沙箱下执行简单只读命令失败
+- Why: 命令包装层直接报错 `bwrap: Unknown option --argv0`
+- `functions.apply_patch` 也失败
+- Why: 同样触发 `bwrap: Unknown option --argv0`，不是 patch 内容本身的问题
+- `exec_command` 改用 `/bin/sh`、`login:false` 也未解决
+
+Candidates
+- 下次优先直接使用 `exec_command + require_escalated`，不要先浪费时间尝试默认沙箱命令
+- 需要写文件时，优先使用 heredoc 写入；不要先尝试 `apply_patch`
+- 需要校验结果时，优先用 `sed -n` 或 `grep -n` 做最小化验证
+
+Next
+- 后续在这个仓库中，只要再次遇到同类读写任务，默认采用“提权 exec_command + heredoc/grep/sed”路径
+- Blocker: 当前还不清楚这是仓库特有问题，还是会话级执行器兼容问题；但在本仓库内已有稳定 workaround

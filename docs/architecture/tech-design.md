@@ -180,7 +180,8 @@ synapse/
 │   └── langchain_tool.py
 │
 └── docs/
-    ├── product.md                   # 产品需求文档
+    ├── product/
+    │   └── product.md               # 产品需求文档
     └── tech.md                      # 本文档
 ```
 
@@ -1618,7 +1619,7 @@ All checks passed. Synapse is ready to run.
 
 ## 14. 待补充设计（TODO）
 
-以下内容在 product.md 中已定义需求，tech.md 尚未展开技术设计，按 Phase 排期逐步补充。
+以下内容在 `../product/product.md` 中已定义需求，本文尚未展开技术设计，按 Phase 排期逐步补充。
 
 | 编号 | 功能 | 对应 product.md | 排期 | 说明 |
 | :--- | :--- | :--- | :--- | :--- |

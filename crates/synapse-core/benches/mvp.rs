@@ -51,7 +51,11 @@ fn request() -> ExecuteRequest {
         language: "python".to_string(),
         code: "print('hello')\n".to_string(),
         timeout_ms: 5_000,
+        cpu_time_limit_ms: Some(5_000),
         memory_limit_mb: 128,
+        runtime_version: None,
+        tenant_id: None,
+        request_id: None,
     }
 }
 

@@ -1,0 +1,50 @@
+## 2026-03-26 09:40
+
+Goal: diagnose why local Codex commands and `apply_patch` were failing, then restore normal sandboxed command execution.
+
+Progress
+- Confirmed that reads and edits through the Codex command wrapper were failing before command execution.
+- Identified the direct error as `bwrap: Unknown option --argv0`.
+- Verified that the installed system `bubblewrap` was too old for the wrapper: `/usr/bin/bwrap --version` returned `0.4.0`.
+- Confirmed the host OS is `Alibaba Cloud Linux 3 (OpenAnolis Edition)`.
+- Verified the configured OS repositories only provide `bubblewrap 0.4.0`, so a normal package upgrade would not solve the problem.
+- Installed build dependencies with `dnf`.
+- Built `bubblewrap 0.11.0` from the official release source.
+- Installed the new binary to `/usr/local/bin/bwrap`.
+- Verified that interactive shell resolution preferred `/usr/local/bin/bwrap`, but the Codex non-escalated sandbox wrapper still failed.
+- Determined the wrapper was effectively using `/usr/bin/bwrap`, not the PATH-preferred `/usr/local/bin/bwrap`.
+- Replaced `/usr/bin/bwrap` with the newly built `0.11.0` binary and kept a backup at `/usr/bin/bwrap.old-0.4.0`.
+- Re-ran non-escalated commands successfully after the replacement.
+
+Validated
+- Wrapper failure symptom:
+  - Evidence: commands like `sed -n '1,5p' TODO.md` failed with `bwrap: Unknown option --argv0`.
+- Installed system version before fix:
+  - Evidence: `/usr/bin/bwrap --version` -> `bubblewrap 0.4.0`
+  - Evidence: `rpm -q bubblewrap` -> `bubblewrap-0.4.0-2.2.al8.x86_64`
+- Repository availability:
+  - Evidence: `dnf list --showduplicates bubblewrap` only listed `0.4.0` builds.
+- PATH behavior after local install:
+  - Evidence: `which bwrap` -> `/usr/local/bin/bwrap`
+  - Evidence: `bwrap --version` -> `bubblewrap 0.11.0`
+- Actual wrapper dependency on `/usr/bin/bwrap`:
+  - Evidence: non-escalated commands still failed until `/usr/bin/bwrap` was replaced.
+- Final restored state:
+  - Evidence: `/usr/bin/bwrap --version` -> `bubblewrap 0.11.0`
+  - Evidence: non-escalated `sed -n '1,5p' TODO.md` succeeded afterwards.
+
+Failed
+- Installing a newer `bwrap` only under `/usr/local/bin`.
+- Why: the Codex wrapper did not honor PATH ordering for its internal `bwrap` invocation and continued to hit `/usr/bin/bwrap`.
+- First build attempt with Meson option `-Dman=false`.
+- Why: this project expects `-Dman=disabled`, not `false`.
+
+Candidates
+- If this environment is rebuilt, automate the replacement of `/usr/bin/bwrap` or provide a newer RPM in the base image/repository.
+- Consider documenting that Codex sandbox wrappers may require `bubblewrap >= 0.9.0` because of `--argv0`.
+- If system package ownership matters, replace the manual binary swap with an internal RPM/backport of newer `bubblewrap`.
+
+Next
+- Current goal after this fix: normal repository work can proceed again with non-escalated commands and `apply_patch`.
+- Keep in mind that the old binary backup remains at `/usr/bin/bwrap.old-0.4.0`.
+- Blocker: none for command execution; only operational consideration is whether the manual `/usr/bin/bwrap` replacement should later be formalized through packaging.

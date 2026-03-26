@@ -1,6 +1,10 @@
 use std::{fs, io};
 
-use synapse_core::{find_command, temp_path, Providers, SystemProviders};
+#[cfg(target_os = "linux")]
+use synapse_core::probe_cgroup_v2_support;
+use synapse_core::{
+    find_command, temp_path, AuditLog, Providers, RuntimeRegistry, SystemProviders,
+};
 
 #[derive(Debug)]
 struct DoctorCheck {
@@ -14,6 +18,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let checks = vec![
         command_check(&providers, "python3", "required to execute Python code"),
         sandbox_tool_check(&providers),
+        cgroup_v2_check(&providers),
+        runtime_check(),
+        audit_log_check(&providers),
         temp_dir_check(&providers),
     ];
 
@@ -68,6 +75,35 @@ fn sandbox_tool_check(providers: &dyn Providers) -> DoctorCheck {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn cgroup_v2_check(providers: &dyn Providers) -> DoctorCheck {
+    match probe_cgroup_v2_support(providers) {
+        Ok(support) => DoctorCheck {
+            name: "cgroupv2",
+            ok: true,
+            detail: format!(
+                "cgroups v2 available at {} with controllers {}",
+                support.root.display(),
+                support.controllers.join(",")
+            ),
+        },
+        Err(error) => DoctorCheck {
+            name: "cgroupv2",
+            ok: false,
+            detail: error.to_string(),
+        },
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cgroup_v2_check(_providers: &dyn Providers) -> DoctorCheck {
+    DoctorCheck {
+        name: "cgroupv2",
+        ok: false,
+        detail: "cgroups v2 checks are only supported on Linux".to_string(),
+    }
+}
+
 fn temp_dir_check(providers: &dyn Providers) -> DoctorCheck {
     let temp_dir = temp_path(providers, "synapse-doctor");
 
@@ -86,6 +122,39 @@ fn temp_dir_check(providers: &dyn Providers) -> DoctorCheck {
             detail: format!(
                 "cannot write sandbox workspace in {}: {error}",
                 temp_dir.display()
+            ),
+        },
+    }
+}
+
+fn runtime_check() -> DoctorCheck {
+    let runtimes = RuntimeRegistry.list();
+    let available = runtimes
+        .iter()
+        .filter(|runtime| runtime.resolved_version != "unavailable")
+        .count();
+
+    DoctorCheck {
+        name: "runtime",
+        ok: available > 0,
+        detail: format!("{available} configured runtime(s) available"),
+    }
+}
+
+fn audit_log_check(providers: &dyn Providers) -> DoctorCheck {
+    let log = AuditLog::from_providers(providers);
+    match fs::create_dir_all(log.root()) {
+        Ok(()) => DoctorCheck {
+            name: "audit",
+            ok: true,
+            detail: format!("audit log root writable ({})", log.root().display()),
+        },
+        Err(error) => DoctorCheck {
+            name: "audit",
+            ok: false,
+            detail: format!(
+                "cannot initialize audit log root {}: {error}",
+                log.root().display()
             ),
         },
     }
