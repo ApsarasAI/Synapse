@@ -1,8 +1,8 @@
 # TODO
 
 - Status summary (based on current codebase review):
-  - Fully implemented: 0
-  - Partially implemented: 8
+  - Fully implemented: 1
+  - Partially implemented: 7
   - Not implemented: 1
   - Current status labels:
     - `Not implemented`: no production code for the TODO item yet
@@ -37,9 +37,10 @@
 - [P1 / High] Add runtime and language management. `[Partially implemented]`
   Why: the project is still effectively a Python-only MVP and needs explicit runtime/version management before it can behave like a real execution platform.
   Current assessment:
-  - There is now a `RuntimeRegistry`, request-level `runtime_version`, and basic runtime listing from the CLI.
-  - Language resolution is no longer hard-coded directly in the execution path.
-  - In practice, the system still only supports Python and does not yet provide real install/list/select lifecycle management for multiple runtimes.
+  - There is now a managed runtime store with per-version `manifest.json`, integrity hash validation, and active-version pointers.
+  - The CLI now supports `runtime list`, `runtime install`, and `runtime activate`.
+  - Execution resolves runtimes through the managed registry instead of hard-coding Python lookup directly in the execution path, and startup bootstraps a managed `python:system` runtime when available.
+  - The system still only supports Python, and the default bootstrap path still imports from the host `python3`, so this is not yet a full multi-language or independently provisioned runtime platform.
   Next steps:
   1. Define runtime metadata and version selection for supported languages.
   2. Add CLI and/or config support for installing, listing, and selecting runtimes.

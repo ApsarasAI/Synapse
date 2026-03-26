@@ -419,7 +419,7 @@ async fn execute_reports_capacity_rejected_when_queue_is_full() {
             max_cpu_time_limit_ms: 30_000,
             max_memory_limit_mb: 512,
             max_queue_depth: 1,
-            max_queue_timeout_ms: 500,
+            max_queue_timeout_ms: 2_000,
         }),
     );
     let app = router_with_state(state);

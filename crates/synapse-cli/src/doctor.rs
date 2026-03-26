@@ -128,16 +128,13 @@ fn temp_dir_check(providers: &dyn Providers) -> DoctorCheck {
 }
 
 fn runtime_check() -> DoctorCheck {
-    let runtimes = RuntimeRegistry.list();
-    let available = runtimes
-        .iter()
-        .filter(|runtime| runtime.resolved_version != "unavailable")
-        .count();
+    let runtimes = RuntimeRegistry::default().list();
+    let available = runtimes.iter().filter(|runtime| runtime.healthy).count();
 
     DoctorCheck {
         name: "runtime",
         ok: available > 0,
-        detail: format!("{available} configured runtime(s) available"),
+        detail: format!("{available} managed runtime(s) available"),
     }
 }
 

@@ -27,6 +27,9 @@ pub enum AuditEventKind {
     ExecutionFinished,
     LimitExceeded,
     PolicyBlocked,
+    FileAccess,
+    NetworkAttempt,
+    ProcessSpawn,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

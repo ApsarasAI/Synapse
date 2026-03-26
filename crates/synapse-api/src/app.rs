@@ -1,6 +1,6 @@
 use synapse_core::{
-    AuditLog, ExecutionScheduler, ExecutionSchedulerConfig, SandboxPool, SynapseConfig,
-    SystemProviders, TenantQuotaConfig, TenantQuotaManager,
+    AuditLog, ExecutionScheduler, ExecutionSchedulerConfig, RuntimeRegistry, SandboxPool,
+    SynapseConfig, SystemProviders, TenantQuotaConfig, TenantQuotaManager,
 };
 
 use crate::metrics::ExecutionMetrics;
@@ -12,10 +12,21 @@ pub struct AppState {
     tenant_quotas: TenantQuotaManager,
     scheduler: ExecutionScheduler,
     execution_metrics: ExecutionMetrics,
+    runtime_registry: RuntimeRegistry,
 }
 
 impl AppState {
     pub fn new(pool: SandboxPool, audit_log: AuditLog, tenant_quotas: TenantQuotaManager) -> Self {
+        Self::new_with_runtime_registry(pool, audit_log, tenant_quotas, RuntimeRegistry::default())
+    }
+
+    pub fn new_with_runtime_registry(
+        pool: SandboxPool,
+        audit_log: AuditLog,
+        tenant_quotas: TenantQuotaManager,
+        runtime_registry: RuntimeRegistry,
+    ) -> Self {
+        let _ = runtime_registry.bootstrap_system_defaults();
         let scheduler = ExecutionScheduler::new(ExecutionSchedulerConfig::new(
             pool.metrics().configured_size,
             tenant_quotas.config().max_queue_depth,
@@ -28,6 +39,7 @@ impl AppState {
             tenant_quotas,
             scheduler,
             execution_metrics: ExecutionMetrics::default(),
+            runtime_registry,
         }
     }
 
@@ -50,12 +62,18 @@ impl AppState {
     pub fn execution_metrics(&self) -> &ExecutionMetrics {
         &self.execution_metrics
     }
+
+    pub fn runtime_registry(&self) -> &RuntimeRegistry {
+        &self.runtime_registry
+    }
 }
 
 pub fn default_state() -> AppState {
     let config = SynapseConfig::from_providers(&SystemProviders);
-    AppState::new(
-        SandboxPool::new(config.pool_size),
+    let runtime_registry = RuntimeRegistry::default();
+    let _ = runtime_registry.bootstrap_system_defaults();
+    AppState::new_with_runtime_registry(
+        SandboxPool::new_with_runtime_registry(config.pool_size, runtime_registry.clone()),
         AuditLog::from_providers(&SystemProviders),
         TenantQuotaManager::new(TenantQuotaConfig {
             max_concurrent_executions_per_tenant: config.tenant_max_concurrency,
@@ -66,5 +84,6 @@ pub fn default_state() -> AppState {
             max_queue_depth: config.max_queue_depth,
             max_queue_timeout_ms: config.max_queue_timeout_ms,
         }),
+        runtime_registry,
     )
 }

@@ -3,12 +3,20 @@ use std::path::Path;
 use tracing::{info, instrument};
 
 use crate::{
-    new_request_id, runtime, ExecuteRequest, ExecuteResponse, LimitSummary, RuntimeInfo,
-    RuntimeRegistry, SynapseError, SystemProviders,
+    new_request_id, runtime, ExecuteRequest, ExecuteResponse, LimitSummary, RuntimeRegistry,
+    SynapseError, SystemProviders,
 };
 
 #[instrument(skip(request), fields(language = %request.language, tenant_id = request.tenant_id.as_deref().unwrap_or("default")))]
-pub async fn execute(mut request: ExecuteRequest) -> Result<ExecuteResponse, SynapseError> {
+pub async fn execute(request: ExecuteRequest) -> Result<ExecuteResponse, SynapseError> {
+    let registry = RuntimeRegistry::default();
+    execute_with_registry(&registry, request).await
+}
+
+pub async fn execute_with_registry(
+    registry: &RuntimeRegistry,
+    mut request: ExecuteRequest,
+) -> Result<ExecuteResponse, SynapseError> {
     validate_request(&request)?;
     let request_id = request
         .request_id
@@ -17,7 +25,7 @@ pub async fn execute(mut request: ExecuteRequest) -> Result<ExecuteResponse, Syn
     request.request_id = Some(request_id.clone());
 
     let sandbox = runtime::prepare_sandbox().await?;
-    let result = execute_in_prepared(&sandbox, request).await;
+    let result = execute_in_prepared_with_registry(&sandbox, registry, request).await;
     let _ = sandbox.destroy_blocking();
     info!(request_id, "execution finished in disposable sandbox");
     result
@@ -26,6 +34,15 @@ pub async fn execute(mut request: ExecuteRequest) -> Result<ExecuteResponse, Syn
 #[instrument(skip(sandbox, request), fields(language = %request.language, request_id = request.request_id.as_deref().unwrap_or("generated")))]
 pub async fn execute_in_prepared(
     sandbox: &runtime::PreparedSandbox,
+    request: ExecuteRequest,
+) -> Result<ExecuteResponse, SynapseError> {
+    let registry = RuntimeRegistry::default();
+    execute_in_prepared_with_registry(sandbox, &registry, request).await
+}
+
+pub async fn execute_in_prepared_with_registry(
+    sandbox: &runtime::PreparedSandbox,
+    registry: &RuntimeRegistry,
     mut request: ExecuteRequest,
 ) -> Result<ExecuteResponse, SynapseError> {
     validate_request(&request)?;
@@ -36,8 +53,8 @@ pub async fn execute_in_prepared(
     request.request_id = Some(request_id.clone());
     sandbox.reset().await?;
 
-    let runtime = resolve_runtime(&request)?;
-    let result = execute_in_sandbox(sandbox.path(), &request, &runtime.info).await;
+    let runtime = resolve_runtime(registry, &request)?;
+    let result = execute_in_sandbox(sandbox.path(), &request, &runtime).await;
     match sandbox.reset().await {
         Ok(()) => result,
         Err(error) => Err(error),
@@ -47,13 +64,11 @@ pub async fn execute_in_prepared(
 async fn execute_in_sandbox(
     sandbox_dir: &Path,
     request: &ExecuteRequest,
-    runtime: &RuntimeInfo,
+    runtime: &crate::ResolvedRuntime,
 ) -> Result<ExecuteResponse, SynapseError> {
-    let binary = RuntimeRegistry
-        .resolve(&request.language, request.runtime_version.as_deref())?
-        .binary;
-    let response = runtime::execute_binary(
-        &binary,
+    let mut response = runtime::execute_binary(
+        &runtime.binary,
+        &runtime.workspace_lowerdir,
         &request.code,
         sandbox_dir,
         request.timeout_ms,
@@ -61,6 +76,13 @@ async fn execute_in_sandbox(
         request.memory_limit_mb,
     )
     .await?;
+    for event in &mut response.sandbox_audit {
+        event.request_id = request
+            .request_id
+            .clone()
+            .unwrap_or_else(|| new_request_id(&SystemProviders));
+        event.tenant_id = request.tenant_id.clone();
+    }
 
     Ok(response.with_request_metadata(
         request
@@ -68,7 +90,7 @@ async fn execute_in_sandbox(
             .clone()
             .unwrap_or_else(|| new_request_id(&SystemProviders)),
         request.tenant_id.as_deref(),
-        Some(runtime.clone()),
+        Some(runtime.info.clone()),
         LimitSummary {
             wall_time_limit_ms: request.timeout_ms,
             cpu_time_limit_ms: request.effective_cpu_time_limit_ms(),
@@ -105,14 +127,17 @@ fn validate_request(request: &ExecuteRequest) -> Result<(), SynapseError> {
     Ok(())
 }
 
-fn resolve_runtime(request: &ExecuteRequest) -> Result<crate::ResolvedRuntime, SynapseError> {
-    RuntimeRegistry.resolve(&request.language, request.runtime_version.as_deref())
+fn resolve_runtime(
+    registry: &RuntimeRegistry,
+    request: &ExecuteRequest,
+) -> Result<crate::ResolvedRuntime, SynapseError> {
+    registry.resolve(&request.language, request.runtime_version.as_deref())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{resolve_runtime, validate_request};
-    use crate::{ExecuteRequest, SynapseError};
+    use crate::{ExecuteRequest, RuntimeRegistry, SynapseError};
 
     fn request() -> ExecuteRequest {
         ExecuteRequest {
@@ -173,19 +198,21 @@ mod tests {
 
     #[test]
     fn resolve_runtime_accepts_python_aliases_case_insensitively() {
-        let python = resolve_runtime(&request()).unwrap();
+        let registry = RuntimeRegistry::default();
+        let python = resolve_runtime(&registry, &request()).unwrap();
         let mut alias_request = request();
         alias_request.language = "  PyThOn3  ".to_string();
-        let python3 = resolve_runtime(&alias_request).unwrap();
+        let python3 = resolve_runtime(&registry, &alias_request).unwrap();
 
         assert_eq!(python.info.language, python3.info.language);
     }
 
     #[test]
     fn resolve_runtime_rejects_unknown_language() {
+        let registry = RuntimeRegistry::default();
         let mut request = request();
         request.language = "ruby".to_string();
-        let error = resolve_runtime(&request).unwrap_err();
+        let error = resolve_runtime(&registry, &request).unwrap_err();
         assert!(matches!(error, SynapseError::UnsupportedLanguage(language) if language == "ruby"));
     }
 }

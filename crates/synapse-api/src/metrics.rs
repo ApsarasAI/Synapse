@@ -210,6 +210,7 @@ mod tests {
             }),
             error: None,
             audit: None,
+            sandbox_audit: Vec::new(),
         });
         metrics.record_response(&ExecuteResponse::error(
             ExecuteError {

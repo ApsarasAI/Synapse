@@ -12,7 +12,7 @@ use axum::{
 };
 use synapse_core::{
     audit_event, new_request_id, validate_request_id, AuditEvent, AuditEventKind, ExecuteRequest,
-    ExecuteResponse, RuntimeRegistry, SynapseError, SystemProviders,
+    ExecuteResponse, SynapseError, SystemProviders,
 };
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, instrument};
@@ -186,6 +186,7 @@ async fn execute_request(
     };
 
     audit.extend(prepare_execution_audit_events(
+        &state,
         &request_id,
         &tenant_id,
         &req,
@@ -193,6 +194,7 @@ async fn execute_request(
 
     match state.pool().execute(req).await {
         Ok(mut response) => {
+            audit.append(&mut response.sandbox_audit);
             audit.extend(finalize_execution_audit_events(
                 &request_id,
                 &tenant_id,
@@ -547,11 +549,13 @@ fn audit_with_error(
 }
 
 fn prepare_execution_audit_events(
+    state: &AppState,
     request_id: &str,
     tenant_id: &str,
     request: &ExecuteRequest,
 ) -> Vec<AuditEvent> {
-    let resolved_runtime = RuntimeRegistry
+    let resolved_runtime = state
+        .runtime_registry()
         .resolve(&request.language, request.runtime_version.as_deref())
         .ok();
 

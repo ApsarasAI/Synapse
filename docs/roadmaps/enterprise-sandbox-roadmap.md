@@ -96,6 +96,13 @@
 - runtime 丢失或损坏时错误清晰
 - 可回滚到前一版本
 
+当前进展（2026-03-26）：
+
+- 已增加 managed runtime store，包含 `runtimes/<language>/<version>/manifest.json` 和 active version 指针
+- 已支持 `synapse runtime list/install/activate`
+- runtime 解析已加入 SHA-256 完整性校验，损坏或缺失时会返回明确 `runtime_unavailable`
+- 当前仍仅支持 Python，且默认 bootstrap 仍会从宿主 `python3` 导入一个 `python:system` 版本，距离完全独立 runtime 供应链还有差距
+
 ### P0.3 容量控制与执行调度
 
 当前问题：

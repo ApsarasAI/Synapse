@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::runtimes::RuntimeInfo;
+use crate::{runtimes::RuntimeInfo, AuditEvent};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ExecuteRequest {
@@ -90,6 +90,8 @@ pub struct ExecuteResponse {
     pub error: Option<ExecuteError>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audit: Option<AuditSummary>,
+    #[serde(skip_serializing)]
+    pub sandbox_audit: Vec<AuditEvent>,
 }
 
 impl ExecuteResponse {
@@ -106,6 +108,7 @@ impl ExecuteResponse {
             output: None,
             error: Some(error),
             audit: None,
+            sandbox_audit: Vec::new(),
         }
     }
 

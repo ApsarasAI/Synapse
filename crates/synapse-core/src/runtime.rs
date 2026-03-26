@@ -8,6 +8,8 @@ use std::{
 
 #[cfg(target_os = "linux")]
 use std::os::fd::RawFd;
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
@@ -22,7 +24,10 @@ use tokio::{
 use crate::cgroups::ExecutionCgroup;
 #[cfg(target_os = "linux")]
 use crate::seccomp::{self, ExportedSeccompFilter};
-use crate::{find_command, temp_path, ExecuteResponse, SynapseError, SystemProviders};
+use crate::{
+    find_command, syscall_audit::collect_trace_audit_events, temp_path, ExecuteResponse,
+    SynapseError, SystemProviders,
+};
 
 const OUTPUT_LIMIT_BYTES: usize = 1024 * 1024;
 const MINIMAL_PATH: &str = "/usr/bin:/bin";
@@ -33,6 +38,7 @@ const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[derive(Clone, Debug)]
 pub struct PreparedSandbox {
     root: PathBuf,
+    upper: PathBuf,
 }
 
 #[derive(Debug)]
@@ -64,37 +70,47 @@ impl SeccompPlan {
 }
 
 impl PreparedSandbox {
+    fn new(root: PathBuf) -> Self {
+        Self {
+            upper: root.join("upper"),
+            root,
+        }
+    }
+
     pub fn path(&self) -> &Path {
-        &self.root
+        &self.upper
     }
 
     pub async fn reset(&self) -> Result<(), SynapseError> {
-        recreate_sandbox_dir(&self.root).await.map_err(Into::into)
+        recreate_sandbox_layout(&self.root)
+            .await
+            .map_err(Into::into)
     }
 
     pub fn reset_blocking(&self) -> Result<(), SynapseError> {
-        recreate_sandbox_dir_blocking(&self.root).map_err(Into::into)
+        recreate_sandbox_layout_blocking(&self.root).map_err(Into::into)
     }
 
     pub fn destroy_blocking(self) -> Result<(), SynapseError> {
-        destroy_sandbox_dir_blocking(&self.root).map_err(Into::into)
+        destroy_sandbox_layout_blocking(&self.root).map_err(Into::into)
     }
 }
 
 pub async fn prepare_sandbox() -> Result<PreparedSandbox, SynapseError> {
     let root = sandbox_dir();
-    create_sandbox_dir(&root).await?;
-    Ok(PreparedSandbox { root })
+    create_sandbox_layout(&root).await?;
+    Ok(PreparedSandbox::new(root))
 }
 
 pub fn prepare_sandbox_blocking() -> Result<PreparedSandbox, SynapseError> {
     let root = sandbox_dir();
-    create_sandbox_dir_blocking(&root)?;
-    Ok(PreparedSandbox { root })
+    create_sandbox_layout_blocking(&root)?;
+    Ok(PreparedSandbox::new(root))
 }
 
 pub(crate) async fn execute_binary(
     binary: &Path,
+    workspace_lowerdir: &Path,
     code: &str,
     sandbox_dir: &Path,
     wall_timeout_ms: u64,
@@ -105,6 +121,7 @@ pub(crate) async fn execute_binary(
     write_script(&script_path, code).await?;
     run_process(
         binary,
+        workspace_lowerdir,
         &script_path,
         sandbox_dir,
         wall_timeout_ms,
@@ -114,43 +131,49 @@ pub(crate) async fn execute_binary(
     .await
 }
 
-async fn create_sandbox_dir(path: &Path) -> Result<(), std::io::Error> {
-    fs::create_dir_all(path).await?;
+async fn create_sandbox_layout(path: &Path) -> Result<(), std::io::Error> {
+    fs::create_dir_all(path.join("upper")).await?;
+    fs::create_dir_all(path.join("work")).await?;
 
     #[cfg(unix)]
     {
         fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await?;
+        fs::set_permissions(path.join("upper"), std::fs::Permissions::from_mode(0o700)).await?;
+        fs::set_permissions(path.join("work"), std::fs::Permissions::from_mode(0o700)).await?;
     }
 
     Ok(())
 }
 
-fn create_sandbox_dir_blocking(path: &Path) -> Result<(), std::io::Error> {
-    stdfs::create_dir_all(path)?;
+fn create_sandbox_layout_blocking(path: &Path) -> Result<(), std::io::Error> {
+    stdfs::create_dir_all(path.join("upper"))?;
+    stdfs::create_dir_all(path.join("work"))?;
 
     #[cfg(unix)]
     {
         stdfs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+        stdfs::set_permissions(path.join("upper"), std::fs::Permissions::from_mode(0o700))?;
+        stdfs::set_permissions(path.join("work"), std::fs::Permissions::from_mode(0o700))?;
     }
 
     Ok(())
 }
 
-async fn recreate_sandbox_dir(path: &Path) -> Result<(), std::io::Error> {
+async fn recreate_sandbox_layout(path: &Path) -> Result<(), std::io::Error> {
     if fs::try_exists(path).await? {
         fs::remove_dir_all(path).await?;
     }
-    create_sandbox_dir(path).await
+    create_sandbox_layout(path).await
 }
 
-fn recreate_sandbox_dir_blocking(path: &Path) -> Result<(), std::io::Error> {
+fn recreate_sandbox_layout_blocking(path: &Path) -> Result<(), std::io::Error> {
     if path.exists() {
         stdfs::remove_dir_all(path)?;
     }
-    create_sandbox_dir_blocking(path)
+    create_sandbox_layout_blocking(path)
 }
 
-fn destroy_sandbox_dir_blocking(path: &Path) -> Result<(), std::io::Error> {
+fn destroy_sandbox_layout_blocking(path: &Path) -> Result<(), std::io::Error> {
     if path.exists() {
         stdfs::remove_dir_all(path)?;
     }
@@ -170,6 +193,7 @@ async fn write_script(path: &Path, code: &str) -> Result<(), std::io::Error> {
 
 async fn run_process(
     binary: &Path,
+    workspace_lowerdir: &Path,
     script_path: &Path,
     sandbox_dir: &Path,
     wall_timeout_ms: u64,
@@ -191,6 +215,7 @@ async fn run_process(
     let mut command = build_command(
         &strategy,
         binary,
+        workspace_lowerdir,
         script_path,
         sandbox_dir,
         #[cfg(target_os = "linux")]
@@ -198,6 +223,13 @@ async fn run_process(
         #[cfg(not(target_os = "linux"))]
         None,
     );
+    #[cfg(target_os = "linux")]
+    let trace_prefix = sandbox_dir
+        .parent()
+        .unwrap_or(sandbox_dir)
+        .join(format!("trace-{}", std::process::id()));
+    #[cfg(target_os = "linux")]
+    wrap_with_strace(&mut command, &trace_prefix)?;
     command
         .stdin(StdStdio::null())
         .stdout(StdStdio::piped())
@@ -207,6 +239,7 @@ async fn run_process(
         .env("LANG", "C.UTF-8")
         .env("PYTHONNOUSERSITE", "1")
         .env("PYTHONUNBUFFERED", "1")
+        .process_group(0)
         .kill_on_drop(true);
     configure_command(
         &mut command,
@@ -224,6 +257,7 @@ async fn run_process(
             SynapseError::Execution("failed to read spawned process id".to_string())
         })?;
         if let Err(error) = execution_cgroup.attach(pid) {
+            kill_process_group(pid);
             let _ = child.kill().await;
             let _ = child.wait().await;
             return Err(error);
@@ -258,6 +292,10 @@ async fn run_process(
             let stdout = collect_output(stdout_task).await?;
             let stderr = collect_output(stderr_task).await?;
             let output = output_summary(&stdout, &stderr);
+            #[cfg(target_os = "linux")]
+            let sandbox_audit = collect_trace_audit_events("", None, &trace_prefix);
+            #[cfg(not(target_os = "linux"))]
+            let sandbox_audit = Vec::new();
             let memory_limit_exceeded = memory_limit_exceeded(
                 &stderr.content,
                 #[cfg(target_os = "linux")]
@@ -288,15 +326,23 @@ async fn run_process(
                     None
                 },
                 audit: None,
+                sandbox_audit,
             })
         }
         ProcessOutcome::WallTimeout => {
+            if let Some(pid) = child.id() {
+                kill_process_group(pid);
+            }
             let _ = child.kill().await;
             let _ = child.wait().await;
 
             let stdout = collect_output(stdout_task).await?;
             let stderr = collect_output(stderr_task).await?;
             let output = output_summary(&stdout, &stderr);
+            #[cfg(target_os = "linux")]
+            let sandbox_audit = collect_trace_audit_events("", None, &trace_prefix);
+            #[cfg(not(target_os = "linux"))]
+            let sandbox_audit = Vec::new();
 
             Ok(ExecuteResponse {
                 stdout: stdout.content,
@@ -310,15 +356,23 @@ async fn run_process(
                 output: Some(output),
                 error: Some(SynapseError::WallTimeout.to_execute_error()),
                 audit: None,
+                sandbox_audit,
             })
         }
         ProcessOutcome::CpuTimeLimitExceeded => {
+            if let Some(pid) = child.id() {
+                kill_process_group(pid);
+            }
             let _ = child.kill().await;
             let _ = child.wait().await;
 
             let stdout = collect_output(stdout_task).await?;
             let stderr = collect_output(stderr_task).await?;
             let output = output_summary(&stdout, &stderr);
+            #[cfg(target_os = "linux")]
+            let sandbox_audit = collect_trace_audit_events("", None, &trace_prefix);
+            #[cfg(not(target_os = "linux"))]
+            let sandbox_audit = Vec::new();
 
             Ok(ExecuteResponse {
                 stdout: stdout.content,
@@ -332,6 +386,7 @@ async fn run_process(
                 output: Some(output),
                 error: Some(SynapseError::CpuTimeLimitExceeded.to_execute_error()),
                 audit: None,
+                sandbox_audit,
             })
         }
     }
@@ -371,6 +426,7 @@ fn prepare_seccomp(
 fn build_command(
     strategy: &SandboxStrategy,
     binary: &Path,
+    workspace_lowerdir: &Path,
     _script_path: &Path,
     sandbox_dir: &Path,
     #[cfg(target_os = "linux")] seccomp_fd: Option<RawFd>,
@@ -387,7 +443,12 @@ fn build_command(
         SandboxStrategy::Bubblewrap { bwrap } => {
             let mut command = Command::new(bwrap);
             command
-                .args(bubblewrap_args(binary, sandbox_dir, seccomp_fd))
+                .args(bubblewrap_args(
+                    binary,
+                    workspace_lowerdir,
+                    sandbox_dir,
+                    seccomp_fd,
+                ))
                 .current_dir(sandbox_dir);
             command
         }
@@ -404,6 +465,38 @@ fn sandbox_strategy() -> Result<SandboxStrategy, SynapseError> {
     {
         Ok(SandboxStrategy::Direct)
     }
+}
+
+#[cfg(target_os = "linux")]
+fn wrap_with_strace(command: &mut Command, trace_prefix: &Path) -> Result<(), SynapseError> {
+    let strace = resolve_binary("strace").map_err(|_| {
+        SynapseError::Audit("strace is required for sandbox audit capture".to_string())
+    })?;
+    let program = command.as_std().get_program().to_os_string();
+    let args: Vec<_> = command
+        .as_std()
+        .get_args()
+        .map(|arg| arg.to_os_string())
+        .collect();
+    let current_dir = command.as_std().get_current_dir().map(PathBuf::from);
+    let std_command = command.as_std_mut();
+    *std_command = StdCommand::new(strace);
+    std_command.args([
+        OsString::from("-ff"),
+        OsString::from("-qq"),
+        OsString::from("-s"),
+        OsString::from("256"),
+        OsString::from("-e"),
+        OsString::from("trace=%file,%network,%process"),
+        OsString::from("-o"),
+        trace_prefix.as_os_str().to_os_string(),
+        program,
+    ]);
+    std_command.args(args);
+    if let Some(current_dir) = current_dir {
+        std_command.current_dir(current_dir);
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -436,15 +529,24 @@ fn bubblewrap_supported(bwrap: &Path, probe_binary: &Path) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn bubblewrap_args(binary: &Path, sandbox_dir: &Path, seccomp_fd: Option<RawFd>) -> Vec<OsString> {
+fn bubblewrap_args(
+    binary: &Path,
+    workspace_lowerdir: &Path,
+    sandbox_dir: &Path,
+    seccomp_fd: Option<RawFd>,
+) -> Vec<OsString> {
     let mut args = bubblewrap_base_args();
     if let Some(fd) = seccomp_fd {
         args.push(OsString::from("--seccomp"));
         args.push(OsString::from(fd.to_string()));
     }
+    let work_dir = sandbox_dir.parent().unwrap_or(sandbox_dir).join("work");
     args.extend([
-        OsString::from("--bind"),
+        OsString::from("--overlay-src"),
+        workspace_lowerdir.as_os_str().to_os_string(),
+        OsString::from("--overlay"),
         sandbox_dir.as_os_str().to_os_string(),
+        work_dir.as_os_str().to_os_string(),
         OsString::from(SANDBOX_WORKDIR),
         OsString::from("--ro-bind"),
         OsString::from("/usr"),
@@ -463,10 +565,20 @@ fn bubblewrap_args(binary: &Path, sandbox_dir: &Path, seccomp_fd: Option<RawFd>)
         OsString::from("/sbin"),
         OsString::from("--chdir"),
         OsString::from(SANDBOX_WORKDIR),
-        binary.as_os_str().to_os_string(),
+        sandbox_runtime_binary(binary),
         OsString::from(SANDBOX_SCRIPT_PATH),
     ]);
     args
+}
+
+#[cfg(target_os = "linux")]
+fn sandbox_runtime_binary(binary: &Path) -> OsString {
+    let name = binary
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("python3");
+    OsString::from(format!("{SANDBOX_WORKDIR}/{name}"))
 }
 
 #[cfg(target_os = "linux")]
@@ -582,6 +694,24 @@ fn append_limit_message(mut stderr: String, message: &str) -> String {
 #[cfg(target_os = "linux")]
 fn cpu_time_limit_usec(timeout_ms: u64) -> u64 {
     timeout_ms.saturating_mul(1_000)
+}
+
+/// Kill the entire process group by sending SIGKILL to -pid.
+/// When `process_group(0)` is set on the command, the child and all
+/// its descendants share the same process group. Killing the group
+/// ensures strace-wrapped processes don't become orphans.
+#[cfg(unix)]
+fn kill_process_group(pid: u32) {
+    // Negative PID means send signal to the process group
+    let pgid = -(pid as i32);
+    unsafe {
+        libc::kill(pgid, libc::SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(_pid: u32) {
+    // On non-Unix systems, fall back to nothing (child.kill() will be used)
 }
 async fn collect_output(
     task: tokio::task::JoinHandle<Result<Vec<u8>, std::io::Error>>,
@@ -759,9 +889,10 @@ fn canonicalize_binary(path: &Path) -> Result<PathBuf, SynapseError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_limit_message, create_sandbox_dir_blocking, destroy_sandbox_dir_blocking,
-        memory_limit_bytes, memory_limit_exceeded, output_summary, recreate_sandbox_dir_blocking,
-        truncate_output, write_script, OutputCapture, OUTPUT_LIMIT_BYTES,
+        append_limit_message, create_sandbox_layout_blocking, destroy_sandbox_layout_blocking,
+        memory_limit_bytes, memory_limit_exceeded, output_summary,
+        recreate_sandbox_layout_blocking, truncate_output, write_script, OutputCapture,
+        OUTPUT_LIMIT_BYTES,
     };
     #[cfg(target_os = "linux")]
     use super::{cpu_time_limit_usec, require_cpu_limit_support};
@@ -859,23 +990,23 @@ mod tests {
     }
 
     #[test]
-    fn recreate_sandbox_dir_blocking_removes_existing_contents() {
+    fn recreate_sandbox_layout_blocking_removes_existing_contents() {
         let path = unique_path("synapse-runtime-reset");
-        create_sandbox_dir_blocking(&path).unwrap();
+        create_sandbox_layout_blocking(&path).unwrap();
         fs::write(path.join("stale.txt"), b"stale").unwrap();
 
-        recreate_sandbox_dir_blocking(&path).unwrap();
+        recreate_sandbox_layout_blocking(&path).unwrap();
 
         assert!(path.is_dir());
         assert!(!path.join("stale.txt").exists());
 
-        let _ = destroy_sandbox_dir_blocking(&path);
+        let _ = destroy_sandbox_layout_blocking(&path);
     }
 
     #[tokio::test]
     async fn write_script_persists_code_to_disk() {
         let path = unique_path("synapse-runtime-script");
-        create_sandbox_dir_blocking(&path).unwrap();
+        create_sandbox_layout_blocking(&path).unwrap();
         let script = path.join("main.py");
 
         write_script(&script, "print(42)\n").await.unwrap();
@@ -883,7 +1014,7 @@ mod tests {
         let contents = tokio::fs::read_to_string(&script).await.unwrap();
         assert_eq!(contents, "print(42)\n");
 
-        let _ = destroy_sandbox_dir_blocking(&path);
+        let _ = destroy_sandbox_layout_blocking(&path);
     }
 
     #[test]

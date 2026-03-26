@@ -7,6 +7,7 @@ Progress
 - 新建本地问题记录文件 `/root/workspace/Synapse/docs/commands/review-findings-2026-03-26.md`，持续追加发现的问题。
 - 识别出调度、审计、鉴权和可观测性方面的多项问题，已整理为可继续跟踪的清单。
 - 续审了 request_id/tenant_id 传播链路、错误模型、cgroups 资源限制实现、日志注入风险。
+- 完成了 git diff 变更审查，新增 runtimes.rs、CLI 命令等 6 个文件的变更审计。
 
 Validated
 - 工作区存在大量未暂存改动，但暂存区为空。
@@ -14,74 +15,35 @@ Validated
 - 现有测试在当前代码状态下全部通过。
 - Evidence: `cargo test --workspace`
 
-Reviewed Files
-- `/root/workspace/Synapse/crates/synapse-api/src/app.rs`
-- `/root/workspace/Synapse/crates/synapse-api/src/server.rs`
-- `/root/workspace/Synapse/crates/synapse-api/src/metrics.rs`
-- `/root/workspace/Synapse/crates/synapse-api/tests/api_endpoints.rs`
-- `/root/workspace/Synapse/crates/synapse-api/tests/security_execute.rs`
-- `/root/workspace/Synapse/crates/synapse-core/src/audit.rs`
-- `/root/workspace/Synapse/crates/synapse-core/src/cgroups.rs`
-- `/root/workspace/Synapse/crates/synapse-core/src/config.rs`
-- `/root/workspace/Synapse/crates/synapse-core/src/error.rs`
-- `/root/workspace/Synapse/crates/synapse-core/src/lib.rs`
-- `/root/workspace/Synapse/crates/synapse-core/src/pool.rs`
-- `/root/workspace/Synapse/crates/synapse-core/src/providers.rs`
-- `/root/workspace/Synapse/crates/synapse-core/src/runtime.rs`
-- `/root/workspace/Synapse/crates/synapse-core/src/runtimes.rs`
-- `/root/workspace/Synapse/crates/synapse-core/src/scheduler.rs`
-- `/root/workspace/Synapse/crates/synapse-core/src/service.rs`
-- `/root/workspace/Synapse/crates/synapse-core/src/tenancy.rs`
-- `/root/workspace/Synapse/crates/synapse-core/src/types.rs`
-- `/root/workspace/Synapse/crates/synapse-cli/src/doctor.rs`
-- `/root/workspace/Synapse/crates/synapse-cli/src/main.rs`
-- `/root/workspace/Synapse/docs/commands/code-review.md`
-- `/root/workspace/Synapse/crates/synapse-api/src/lib.rs`
-- `/root/workspace/Synapse/crates/synapse-api/Cargo.toml`
-- `/root/workspace/Synapse/crates/synapse-core/Cargo.toml`
-- `/root/workspace/Synapse/crates/synapse-cli/Cargo.toml`
-- `/root/workspace/Synapse/TODO.md`
-- `/root/workspace/Synapse/docs/session-snapshots/2026-03-25-exec-environment-workarounds.tmp`
-- `/root/workspace/Synapse/docs/session-snapshots/2026-03-26-bwrap-wrapper-fix.tmp`
-- `/root/workspace/Synapse/docs/architecture/tech-design.md`
-- `/root/workspace/Synapse/docs/product/product.md`
-- `/root/workspace/Synapse/docs/roadmaps/enterprise-sandbox-roadmap.md`
-
-Findings
-- High: `crates/synapse-core/src/scheduler.rs`
-- `try_acquire_immediately` 在 `queued_total > 0` 时一律拒绝立即放行，导致全局仍有空闲并发时也可能卡住其他租户请求。
-- Medium: `crates/synapse-api/src/server.rs`
-- `/execute/stream` 通过 WebSocket GET query string 传整份 `ExecuteRequest`，会受 URL 长度限制，正常代码体可能在到达 handler 前失败。
-- Medium: `crates/synapse-api/src/server.rs`
-- `GET /audits/:request_id` 对不存在记录返回 500，而不是更合理的 404。
-- High: `crates/synapse-api/src/server.rs` + `crates/synapse-core/src/audit.rs`
-- `x-synapse-request-id` 未校验即作为审计文件名使用，存在路径穿越和任意路径写入风险。
-- Medium: `crates/synapse-api/src/metrics.rs` + `crates/synapse-api/src/server.rs`
-- 暴露了 `synapse_execute_audit_failed_total` 指标，但 audit 持久化失败只记日志，不会递增该指标。
-- High: `crates/synapse-api/src/server.rs`
-- `GET /audits/:request_id` 无鉴权、无租户归属校验，存在跨租户读取审计记录的越权风险。
-- High: `crates/synapse-core/src/audit.rs`
-- 调用方可自定义 `request_id`，同值会覆盖既有审计文件，除路径穿越外还存在审计篡改/覆盖风险。
-- Medium: `crates/synapse-api/src/server.rs`
-- 用户可控的 `request_id` 和 `tenant_id` 直接传入 tracing 日志，若下游日志格式为纯文本可能存在日志注入风险。
-- Medium: `crates/synapse-core/src/runtime.rs`
-- cgroups v2 不可用时静默降级，无 CPU 时间限制的回退机制，可能导致 CPU 限制失效。
-- Low: `crates/synapse-core/src/error.rs` + `crates/synapse-api/src/server.rs`
-- `SynapseError::Io` 和 `SynapseError::Execution` 消息直接返回给客户端，可能泄露内部路径等敏感信息。
+Findings Summary
+- **High severity**: 4 findings (scheduler fairness, path traversal, unauthorized audit access, audit tampering)
+- **Medium severity**: 7 findings (WebSocket URL limits, 404 vs 500, missing metric increment, log injection risk, silent cgroup fallback, language/version path traversal x2, RuntimeRegistry duplication)
+- **Low severity**: 5 findings (error message disclosure, symlink race, manifest path escape, install source validation, version string validation)
 
 Artifacts
 - Findings file: `/root/workspace/Synapse/docs/commands/review-findings-2026-03-26.md`
 - Snapshot file: `/root/workspace/Synapse/docs/session-snapshots/2026-03-26-review-audit.tmp`
 
-Failed
-- `cargo -C /root/workspace/Synapse test --workspace`
-- Why: `cargo -C` 需要 nightly 的 `-Z unstable-options`，已改用仓库根目录执行 `cargo test --workspace`。
+Git Diff Reviewed
+- `crates/synapse-core/src/runtimes.rs` (+487 lines): 新增 managed runtime store，支持 install/activate/list
+- `crates/synapse-cli/src/main.rs`: 新增 `synapse runtime list/install/activate` 命令
+- `crates/synapse-cli/src/doctor.rs`: 运行时检查适配新 registry
+- `crates/synapse-core/src/lib.rs`: 导出 InstalledRuntime, RuntimeManifest
+- `crates/synapse-core/src/service.rs`: 使用 RuntimeRegistry::default() 解析运行时
+- `crates/synapse-api/src/app.rs`: 启动时调用 bootstrap_system_defaults()
+- `crates/synapse-core/Cargo.toml`: 新增 sha2 依赖
+
+New Findings from Git Diff
+- Medium: `normalize_language` 和 `normalized_version` 未禁止路径分隔符，存在路径穿越风险
+- Medium: RuntimeRegistry 多次实例化，可能导致不一致行为
+- Low: `sha256_file` 存在符号链接竞态
+- Low: manifest 的 `binary_path` 可指向运行时目录外
 
 Candidates
-- 审计安全测试文件，确认测试覆盖是否匹配当前安全问题。
-- 验证 bubblewrap 隔离配置是否有可绕过点。
+- 运行测试确认变更不影响现有功能
+- 考虑添加运行时管理相关的安全测试
 
 Next
-- 审计完成，共发现 10 个问题（4 High, 5 Medium, 1 Low）。
-- 重点：审计子系统缺少输入校验和访问控制，是最高优先级修复项。
+- 审计完成，共发现 16 个问题（4 High, 7 Medium, 5 Low）。
+- 最高优先级：审计子系统的输入校验和访问控制，运行时的 language/version 路径校验。
 - Blocker: 无当前阻塞；后续续审前先打开本快照和 `/root/workspace/Synapse/docs/commands/review-findings-2026-03-26.md`。

@@ -12,6 +12,7 @@ pub mod scheduler;
 #[cfg(target_os = "linux")]
 pub mod seccomp;
 pub mod service;
+pub mod syscall_audit;
 pub mod tenancy;
 pub mod types;
 
@@ -27,7 +28,9 @@ pub use executor::{
 };
 pub use pool::{PoolMetrics, SandboxPool};
 pub use providers::{find_command, temp_path, Providers, SystemProviders};
-pub use runtimes::{ResolvedRuntime, RuntimeInfo, RuntimeRegistry};
+pub use runtimes::{
+    InstalledRuntime, ResolvedRuntime, RuntimeInfo, RuntimeManifest, RuntimeRegistry,
+};
 pub use scheduler::{
     ExecutionPermit, ExecutionScheduler, ExecutionSchedulerConfig, SchedulerMetrics,
 };

@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     executor::{self, PreparedSandbox},
-    ExecuteRequest, ExecuteResponse, SynapseError,
+    ExecuteRequest, ExecuteResponse, RuntimeRegistry, SynapseError,
 };
 
 const DEFAULT_POOL_SIZE: usize = 4;
@@ -24,6 +24,7 @@ pub struct SandboxPool {
 #[derive(Debug)]
 struct PoolInner {
     configured_size: usize,
+    runtime_registry: RuntimeRegistry,
     slots: Mutex<VecDeque<PooledSandbox>>,
     next_slot_id: AtomicUsize,
     pooled_total: AtomicUsize,
@@ -74,9 +75,17 @@ pub struct PoolMetrics {
 
 impl SandboxPool {
     pub fn new(configured_size: usize) -> Self {
+        Self::new_with_runtime_registry(configured_size, RuntimeRegistry::default())
+    }
+
+    pub fn new_with_runtime_registry(
+        configured_size: usize,
+        runtime_registry: RuntimeRegistry,
+    ) -> Self {
         let configured_size = configured_size.max(1);
         let inner = Arc::new(PoolInner {
             configured_size,
+            runtime_registry,
             slots: Mutex::new(VecDeque::with_capacity(configured_size)),
             next_slot_id: AtomicUsize::new(0),
             pooled_total: AtomicUsize::new(0),
@@ -192,9 +201,16 @@ impl SandboxLease {
     async fn execute(&mut self, request: ExecuteRequest) -> Result<ExecuteResponse, SynapseError> {
         match self.kind.as_ref() {
             Some(LeaseKind::Pooled(slot)) => {
-                executor::execute_in_prepared(&slot.sandbox, request).await
+                executor::execute_in_prepared_with_registry(
+                    &slot.sandbox,
+                    &self.inner.runtime_registry,
+                    request,
+                )
+                .await
             }
-            Some(LeaseKind::Overflow) => executor::execute(request).await,
+            Some(LeaseKind::Overflow) => {
+                executor::execute_with_registry(&self.inner.runtime_registry, request).await
+            }
             None => Err(SynapseError::Execution(
                 "sandbox lease was already released".to_string(),
             )),
