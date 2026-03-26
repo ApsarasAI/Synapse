@@ -1,20 +1,20 @@
 # TODO
 
 - Status summary (based on current codebase review):
-  - Fully implemented: 1
-  - Partially implemented: 7
-  - Not implemented: 1
+  - Fully implemented: 3
+  - Partially implemented: 6
+  - Not implemented: 0
   - Current status labels:
     - `Not implemented`: no production code for the TODO item yet
     - `Partially implemented`: some code/tests/CLI/API support exists, but the TODO item is not complete
     - `Implemented`: all listed next steps are effectively done
 
-- [P0 / Critical] Build OverlayFS-based layered runtimes. `[Not implemented]`
+- [P0 / Critical] Build OverlayFS-based layered runtimes. `[Implemented]`
   Why: this is the highest-value infrastructure gap for startup latency, concurrency density, and future multi-language support.
   Current assessment:
-  - The runtime still uses a single writable sandbox directory and resets it by deleting/recreating the directory.
-  - Linux isolation is currently provided via `bubblewrap --bind`, not OverlayFS lower/upper/work/merged mounts.
-  - There are design notes for OverlayFS in `tech_design.md` and `overlayfs-solution-analysis.md`, but no runtime implementation yet.
+  - Linux execution now mounts `/workspace` through `bubblewrap` overlay arguments with a shared runtime lower layer plus per-sandbox `upper/` and `work/` directories.
+  - Pooled sandbox reset clears and recreates the writable layers between executions, and disposable sandboxes destroy them at the end of the request lifecycle.
+  - Integration coverage now exercises write isolation across sequential executions and verifies that only the writable layer directories remain after reset.
   Next steps:
   1. Define the read-only runtime layer layout and writable upper/work layer lifecycle.
   2. Mount sandbox filesystems with OverlayFS instead of the current single writable directory approach.
@@ -38,9 +38,9 @@
   Why: the project is still effectively a Python-only MVP and needs explicit runtime/version management before it can behave like a real execution platform.
   Current assessment:
   - There is now a managed runtime store with per-version `manifest.json`, integrity hash validation, and active-version pointers.
-  - The CLI now supports `runtime list`, `runtime install`, and `runtime activate`.
-  - Execution resolves runtimes through the managed registry instead of hard-coding Python lookup directly in the execution path, and startup bootstraps a managed `python:system` runtime when available.
-  - The system still only supports Python, and the default bootstrap path still imports from the host `python3`, so this is not yet a full multi-language or independently provisioned runtime platform.
+  - The CLI now supports `runtime list`, `runtime verify`, `runtime install`, `runtime import-host`, and `runtime activate`.
+  - Execution resolves runtimes through the managed registry instead of hard-coding Python lookup directly in the execution path, and missing active runtimes now fail explicitly instead of silently importing from the host.
+  - The system still only supports Python, and the explicit `runtime import-host` flow still depends on a host `python3`, so this is not yet a full multi-language or independently provisioned runtime platform.
   Next steps:
   1. Define runtime metadata and version selection for supported languages.
   2. Add CLI and/or config support for installing, listing, and selecting runtimes.
@@ -60,12 +60,12 @@
   3. Add request-correlated logs for sandbox creation, execution, reset, and cleanup.
   4. Add tests or smoke checks for emitted metrics and tracing coverage where practical.
 
-- [P0 / Critical] Add audit logging. `[Partially implemented]`
+- [P0 / Critical] Add audit logging. `[Implemented]`
   Why: this is a core product differentiator in `product.md` and a prerequisite for enterprise trust, compliance review, and security operations.
   Current assessment:
   - The codebase now has an audit event model, persisted audit logs, and an audit retrieval endpoint.
-  - Request receipt, quota outcomes, command preparation, execution start/finish, and limit-exceeded outcomes are recorded with structured fields.
-  - This is still not full sandbox behavior audit logging: file access and network attempts are not captured from inside the sandbox, and policy-block detail remains coarse.
+  - Request receipt, quota outcomes, command preparation, execution start/finish, limit-exceeded outcomes, file access, network attempts, and process spawn attempts are all captured with structured fields.
+  - Syscall-derived sandbox events are collected via `strace` and appended to the same request-scoped audit record surfaced by `/audits/:request_id`.
   Next steps:
   1. Define the structured audit event model for file access, command execution, network attempts, and policy blocks.
   2. Capture and persist audit events during sandbox execution with low overhead.
@@ -103,7 +103,8 @@
   Why: startup latency and throughput are part of the product promise, so they need automated validation rather than ad hoc measurement.
   Current assessment:
   - Criterion benchmarks already exist for pool acquire, sandbox creation, and a basic execute path.
-  - There are still no repeatable HTTP load tests, no explicit regression thresholds, and no CI/release performance gate.
+  - There is now a single repo-level `scripts/p0_gate.sh` entrypoint that runs formatting, clippy, and the full workspace test suite as the release/security gate for the current kernel baseline.
+  - There are still no repeatable HTTP load tests and no explicit performance regression thresholds.
   Next steps:
   1. Add criterion benchmarks for sandbox creation, pool acquire, execution, and recycle paths.
   2. Add repeatable HTTP load tests for target concurrency and latency envelopes.

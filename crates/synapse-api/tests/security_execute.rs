@@ -3,8 +3,11 @@ use axum::{
     http::{Request, StatusCode},
 };
 use serde_json::{json, Value};
-use std::sync::OnceLock;
-use synapse_api::server::router;
+use std::{env, fs, path::PathBuf, sync::OnceLock};
+use synapse_api::server::{router_with_state, AppState};
+use synapse_core::{
+    find_command, AuditLog, RuntimeRegistry, SandboxPool, SystemProviders, TenantQuotaManager,
+};
 use tokio::sync::Mutex;
 use tower::util::ServiceExt;
 
@@ -19,7 +22,10 @@ async fn execute_does_not_expose_host_etc_passwd() {
         return;
     }
 
-    let response = router()
+    let Some(app) = runtime_test_app() else {
+        return;
+    };
+    let response = app
         .oneshot(json_request(
             "/execute",
             json!({
@@ -44,7 +50,10 @@ async fn execute_blocks_process_spawning_syscalls() {
         return;
     }
 
-    let response = router()
+    let Some(app) = runtime_test_app() else {
+        return;
+    };
+    let response = app
         .oneshot(json_request(
             "/execute",
             json!({
@@ -74,7 +83,13 @@ async fn execute_does_not_leak_server_environment() {
     unsafe {
         std::env::set_var("SYNAPSE_HTTP_SECRET", "top-secret");
     }
-    let response = router()
+    let Some(app) = runtime_test_app() else {
+        unsafe {
+            std::env::remove_var("SYNAPSE_HTTP_SECRET");
+        }
+        return;
+    };
+    let response = app
         .oneshot(json_request(
             "/execute",
             json!({
@@ -94,6 +109,40 @@ async fn execute_does_not_leak_server_environment() {
     let body = json_body(response).await;
     assert_eq!(body["stdout"], "missing\n");
     assert_eq!(body["exit_code"], 0);
+}
+
+#[tokio::test]
+async fn execute_blocks_network_access() {
+    if !python3_available().await || !command_available("bwrap").await {
+        return;
+    }
+
+    let Some(app) = runtime_test_app() else {
+        return;
+    };
+    let response = app
+        .oneshot(json_request(
+            "/execute",
+            json!({
+                "language": "python",
+                "code": "import socket\ntry:\n    socket.create_connection(('1.1.1.1', 80), timeout=1)\n    print('connected')\nexcept Exception as exc:\n    print(type(exc).__name__)\n",
+                "timeout_ms": 5_000,
+                "memory_limit_mb": 128
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let stdout = body["stdout"].as_str().unwrap();
+    assert!(!stdout.contains("connected"));
+    assert!(
+        stdout.contains("OSError")
+            || stdout.contains("PermissionError")
+            || stdout.contains("ConnectionRefusedError")
+            || stdout.contains("TimeoutError")
+    );
 }
 
 fn json_request(uri: &str, payload: Value) -> Request<Body> {
@@ -122,4 +171,36 @@ async fn command_available(command: &str) -> bool {
         .status()
         .await
         .is_ok()
+}
+
+fn runtime_test_app() -> Option<axum::Router> {
+    let registry = provision_python_runtime_registry()?;
+    let state = AppState::new_with_runtime_registry(
+        SandboxPool::new_with_runtime_registry(1, registry.clone()),
+        AuditLog::default(),
+        TenantQuotaManager::default(),
+        registry,
+    );
+    Some(router_with_state(state))
+}
+
+fn provision_python_runtime_registry() -> Option<RuntimeRegistry> {
+    let python = find_command(&SystemProviders, "python3")?;
+    let root = unique_runtime_root("synapse-security-runtime");
+    let registry = RuntimeRegistry::from_root(&root);
+    registry.install("python", "system", &python).ok()?;
+    registry.activate("python", "system").ok()?;
+    Some(registry)
+}
+
+fn unique_runtime_root(prefix: &str) -> PathBuf {
+    let path = env::temp_dir().join(format!(
+        "{prefix}-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = fs::remove_dir_all(&path);
+    path
 }

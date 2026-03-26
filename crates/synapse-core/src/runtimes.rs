@@ -84,37 +84,20 @@ impl RuntimeRegistry {
         language: &str,
         requested_version: Option<&str>,
     ) -> Result<ResolvedRuntime, SynapseError> {
-        let normalized = normalize_language(language)?;
-        let active_version = self.active_version(&normalized)?;
-        if requested_version.is_none()
-            && active_version
-                .as_deref()
-                .map(|version| version == "system")
-                .unwrap_or(true)
-        {
-            self.bootstrap_system_defaults()?;
-        }
-
-        let requested_version = requested_version.map(|version| version.trim());
-        let version = match requested_version {
-            Some(version) if !version.is_empty() => normalized_version(version)?,
-            _ => self.active_version(&normalized)?.ok_or_else(|| {
-                SynapseError::RuntimeUnavailable(format!(
-                    "no active runtime configured for {normalized}"
-                ))
-            })?,
-        };
-        let manifest = self.load_manifest(&normalized, &version)?;
-        let runtime_dir = self.runtime_dir(&normalized, &version);
+        let installed = self.verify(language, requested_version)?;
+        let manifest = self.load_manifest(&installed.language, &installed.version)?;
+        let runtime_dir = self.runtime_dir(&installed.language, &installed.version);
         let binary = manifest_binary_path(&runtime_dir, &manifest)?;
-        validate_manifest_binary(&manifest, &binary)?;
 
         Ok(ResolvedRuntime {
             binary,
             workspace_lowerdir: runtime_dir,
             info: RuntimeInfo {
                 language: manifest.language,
-                requested_version: requested_version.map(str::to_string),
+                requested_version: requested_version
+                    .map(str::trim)
+                    .filter(|version| !version.is_empty())
+                    .map(str::to_string),
                 resolved_version: manifest.version,
                 command: manifest.command,
             },
@@ -122,7 +105,6 @@ impl RuntimeRegistry {
     }
 
     pub fn list(&self) -> Vec<InstalledRuntime> {
-        let _ = self.bootstrap_system_defaults();
         let mut runtimes = Vec::new();
         let runtimes_root = self.runtimes_root();
         let Ok(language_dirs) = fs::read_dir(&runtimes_root) else {
@@ -165,6 +147,39 @@ impl RuntimeRegistry {
                 .then_with(|| left.version.cmp(&right.version))
         });
         runtimes
+    }
+
+    pub fn verify(
+        &self,
+        language: &str,
+        requested_version: Option<&str>,
+    ) -> Result<InstalledRuntime, SynapseError> {
+        let normalized = normalize_language(language)?;
+        let requested_version = requested_version.map(str::trim);
+        let active_version = self.active_version(&normalized)?;
+        let version = match requested_version {
+            Some(version) if !version.is_empty() => normalized_version(version)?,
+            _ => active_version.clone().ok_or_else(|| {
+                SynapseError::RuntimeUnavailable(format!(
+                    "no active runtime configured for {normalized}"
+                ))
+            })?,
+        };
+
+        let manifest = self.load_manifest(&normalized, &version)?;
+        let runtime_dir = self.runtime_dir(&normalized, &version);
+        let binary = manifest_binary_path(&runtime_dir, &manifest)?;
+        validate_manifest_binary(&manifest, &binary)?;
+
+        Ok(InstalledRuntime {
+            language: manifest.language,
+            version: manifest.version,
+            command: manifest.command,
+            active: active_version.as_deref() == Some(version.as_str()),
+            healthy: true,
+            binary,
+            sha256: manifest.sha256,
+        })
     }
 
     pub fn install(
@@ -240,37 +255,36 @@ impl RuntimeRegistry {
         })
     }
 
+    pub fn import_host_runtime(
+        &self,
+        providers: &dyn Providers,
+        language: &str,
+        version: &str,
+        command: &str,
+        activate: bool,
+    ) -> Result<InstalledRuntime, SynapseError> {
+        let Some(source_path) = find_command(providers, command) else {
+            return Err(SynapseError::RuntimeUnavailable(format!(
+                "{command} is not available in PATH"
+            )));
+        };
+
+        let installed = self.install(language, version, &source_path)?;
+        if activate {
+            self.activate(language, version)
+        } else {
+            Ok(installed)
+        }
+    }
+
     pub fn bootstrap_system_defaults(&self) -> Result<(), SynapseError> {
-        if self
-            .active_version(SUPPORTED_PYTHON_LANGUAGE)?
-            .as_deref()
-            .is_some_and(|version| version != "system")
-        {
-            return Ok(());
-        }
-
-        let providers = SystemProviders;
-        let Some(system_python) = find_command(&providers, DEFAULT_PYTHON_COMMAND) else {
-            return Err(SynapseError::RuntimeUnavailable(
-                "python3 is not available and no managed runtime is active".to_string(),
-            ));
-        };
-
-        let system_version = "system";
-        let needs_install = match self.load_manifest(SUPPORTED_PYTHON_LANGUAGE, system_version) {
-            Ok(manifest) => {
-                let runtime_dir = self.runtime_dir(SUPPORTED_PYTHON_LANGUAGE, system_version);
-                match manifest_binary_path(&runtime_dir, &manifest) {
-                    Ok(binary) => validate_manifest_binary(&manifest, &binary).is_err(),
-                    Err(_) => true,
-                }
-            }
-            Err(_) => true,
-        };
-        if needs_install {
-            self.install(SUPPORTED_PYTHON_LANGUAGE, system_version, &system_python)?;
-        }
-        self.activate(SUPPORTED_PYTHON_LANGUAGE, system_version)?;
+        self.import_host_runtime(
+            &SystemProviders,
+            SUPPORTED_PYTHON_LANGUAGE,
+            "system",
+            DEFAULT_PYTHON_COMMAND,
+            true,
+        )?;
         Ok(())
     }
 
@@ -551,6 +565,19 @@ mod tests {
     }
 
     #[test]
+    fn registry_requires_explicit_active_runtime_for_default_resolution() {
+        let root = unique_root("synapse-runtime-registry-missing-active");
+        let registry = RuntimeRegistry::from_root(&root);
+
+        let error = registry.resolve("python", None).unwrap_err();
+        assert!(
+            matches!(error, SynapseError::RuntimeUnavailable(message) if message == "no active runtime configured for python")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn registry_detects_corrupted_runtime_binary() {
         let root = unique_root("synapse-runtime-registry-corrupt");
         let registry = RuntimeRegistry::from_root(&root);
@@ -624,6 +651,24 @@ mod tests {
         assert!(installed
             .binary
             .starts_with(root.join("runtimes/python/3.12.1")));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn registry_verify_returns_active_runtime_details() {
+        let root = unique_root("synapse-runtime-registry-verify");
+        let registry = RuntimeRegistry::from_root(&root);
+        let binary = fake_runtime_binary(&root.join("src"), "python3");
+
+        registry.install("python", "3.12.3", &binary).unwrap();
+        registry.activate("python", "3.12.3").unwrap();
+
+        let runtime = registry.verify("python", None).unwrap();
+        assert_eq!(runtime.language, "python");
+        assert_eq!(runtime.version, "3.12.3");
+        assert!(runtime.active);
+        assert!(runtime.healthy);
 
         let _ = fs::remove_dir_all(root);
     }

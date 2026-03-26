@@ -8,8 +8,6 @@ use std::{
 
 #[cfg(target_os = "linux")]
 use std::os::fd::RawFd;
-#[cfg(target_os = "linux")]
-use std::os::unix::process::CommandExt;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
@@ -79,6 +77,10 @@ impl PreparedSandbox {
 
     pub fn path(&self) -> &Path {
         &self.upper
+    }
+
+    pub fn root_path(&self) -> &Path {
+        &self.root
     }
 
     pub async fn reset(&self) -> Result<(), SynapseError> {
@@ -468,6 +470,16 @@ fn sandbox_strategy() -> Result<SandboxStrategy, SynapseError> {
 }
 
 #[cfg(target_os = "linux")]
+pub fn probe_linux_sandbox_support() -> Result<String, SynapseError> {
+    match detect_linux_sandbox_strategy()? {
+        SandboxStrategy::Bubblewrap { bwrap } => Ok(format!(
+            "bubblewrap overlay sandbox available ({})",
+            bwrap.display()
+        )),
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn wrap_with_strace(command: &mut Command, trace_prefix: &Path) -> Result<(), SynapseError> {
     let strace = resolve_binary("strace").map_err(|_| {
         SynapseError::Audit("strace is required for sandbox audit capture".to_string())
@@ -501,31 +513,15 @@ fn wrap_with_strace(command: &mut Command, trace_prefix: &Path) -> Result<(), Sy
 
 #[cfg(target_os = "linux")]
 fn detect_linux_sandbox_strategy() -> Result<SandboxStrategy, SynapseError> {
-    let probe_binary = resolve_binary("true")?;
-
     if let Ok(bwrap) = resolve_binary("bwrap") {
-        if bubblewrap_supported(&bwrap, &probe_binary) {
+        if bubblewrap_supported(&bwrap) {
             return Ok(SandboxStrategy::Bubblewrap { bwrap });
         }
     }
 
-    Err(SynapseError::Execution(
-        "bubblewrap is required for secure execution on Linux; install bwrap".to_string(),
+    Err(SynapseError::RuntimeUnavailable(
+        "bubblewrap with overlay support is required for secure execution on Linux".to_string(),
     ))
-}
-
-#[cfg(target_os = "linux")]
-fn bubblewrap_supported(bwrap: &Path, probe_binary: &Path) -> bool {
-    match StdCommand::new(bwrap)
-        .args(bubblewrap_probe_args(probe_binary))
-        .stdin(StdStdio::null())
-        .stdout(StdStdio::null())
-        .stderr(StdStdio::null())
-        .status()
-    {
-        Ok(status) => status.success(),
-        Err(_) => false,
-    }
 }
 
 #[cfg(target_os = "linux")]
@@ -582,9 +578,41 @@ fn sandbox_runtime_binary(binary: &Path) -> OsString {
 }
 
 #[cfg(target_os = "linux")]
-fn bubblewrap_probe_args(binary: &Path) -> Vec<OsString> {
+fn bubblewrap_supported(bwrap: &Path) -> bool {
+    let probe_root = temp_path(&SystemProviders, "synapse-bwrap-probe");
+    let lowerdir = probe_root.join("lower");
+    let upperdir = probe_root.join("upper");
+    let workdir = probe_root.join("work");
+    let marker = lowerdir.join("marker.txt");
+    let result = (|| -> Result<bool, std::io::Error> {
+        stdfs::create_dir_all(&lowerdir)?;
+        stdfs::create_dir_all(&upperdir)?;
+        stdfs::create_dir_all(&workdir)?;
+        stdfs::write(&marker, b"ok")?;
+
+        let status = StdCommand::new(bwrap)
+            .args(bubblewrap_probe_args(&lowerdir, &upperdir, &workdir))
+            .stdin(StdStdio::null())
+            .stdout(StdStdio::null())
+            .stderr(StdStdio::null())
+            .status()?;
+        Ok(status.success())
+    })();
+    let _ = stdfs::remove_dir_all(&probe_root);
+    result.unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn bubblewrap_probe_args(lowerdir: &Path, upperdir: &Path, workdir: &Path) -> Vec<OsString> {
+    let shell = resolve_binary("sh").unwrap_or_else(|_| PathBuf::from("/bin/sh"));
     let mut args = bubblewrap_base_args();
     args.extend([
+        OsString::from("--overlay-src"),
+        lowerdir.as_os_str().to_os_string(),
+        OsString::from("--overlay"),
+        upperdir.as_os_str().to_os_string(),
+        workdir.as_os_str().to_os_string(),
+        OsString::from(SANDBOX_WORKDIR),
         OsString::from("--ro-bind"),
         OsString::from("/usr"),
         OsString::from("/usr"),
@@ -597,9 +625,16 @@ fn bubblewrap_probe_args(binary: &Path) -> Vec<OsString> {
         OsString::from("--ro-bind-try"),
         OsString::from("/lib64"),
         OsString::from("/lib64"),
+        OsString::from("--ro-bind-try"),
+        OsString::from("/sbin"),
+        OsString::from("/sbin"),
         OsString::from("--chdir"),
-        OsString::from("/"),
-        binary.as_os_str().to_os_string(),
+        OsString::from(SANDBOX_WORKDIR),
+        shell.as_os_str().to_os_string(),
+        OsString::from("-lc"),
+        OsString::from(
+            "test -f /workspace/marker.txt && echo probe > /workspace/write.txt && test -f /workspace/write.txt",
+        ),
     ]);
     args
 }

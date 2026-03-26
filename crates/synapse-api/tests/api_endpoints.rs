@@ -5,11 +5,16 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::{
+    env, fs,
     net::SocketAddr,
+    path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
 use synapse_api::server::{router, router_with_state, AppState};
-use synapse_core::{AuditLog, SandboxPool, TenantQuotaConfig, TenantQuotaManager};
+use synapse_core::{
+    find_command, AuditLog, RuntimeRegistry, SandboxPool, SystemProviders, TenantQuotaConfig,
+    TenantQuotaManager,
+};
 use tokio::net::TcpListener;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tower::util::ServiceExt;
@@ -38,7 +43,10 @@ async fn execute_returns_python_output() {
         return;
     }
 
-    let response = router()
+    let Some(app) = runtime_test_app(1) else {
+        return;
+    };
+    let response = app
         .oneshot(json_request(
             "/execute",
             json!({
@@ -86,7 +94,10 @@ async fn execute_times_out_through_http() {
         return;
     }
 
-    let response = router()
+    let Some(app) = runtime_test_app(1) else {
+        return;
+    };
+    let response = app
         .oneshot(json_request(
             "/execute",
             json!({
@@ -115,7 +126,10 @@ async fn execute_reports_output_truncation_metadata() {
         return;
     }
 
-    let response = router()
+    let Some(app) = runtime_test_app(1) else {
+        return;
+    };
+    let response = app
         .oneshot(json_request(
             "/execute",
             json!({
@@ -145,11 +159,9 @@ async fn metrics_reflect_execute_requests() {
         return;
     }
 
-    let state = AppState::new(
-        SandboxPool::new(2),
-        AuditLog::default(),
-        TenantQuotaManager::default(),
-    );
+    let Some(state) = runtime_test_state(2, TenantQuotaManager::default()) else {
+        return;
+    };
     let app = router_with_state(state);
 
     let response = app
@@ -232,11 +244,9 @@ async fn metrics_track_audit_persist_failures() {
         return;
     }
 
-    let state = AppState::new(
-        SandboxPool::new(1),
-        AuditLog::default(),
-        TenantQuotaManager::default(),
-    );
+    let Some(state) = runtime_test_state(1, TenantQuotaManager::default()) else {
+        return;
+    };
     let app = router_with_state(state);
     let request_id = unique_request_id("duplicate-audit");
 
@@ -286,11 +296,9 @@ async fn metrics_track_timeout_and_truncation_dimensions() {
         return;
     }
 
-    let state = AppState::new(
-        SandboxPool::new(1),
-        AuditLog::default(),
-        TenantQuotaManager::default(),
-    );
+    let Some(state) = runtime_test_state(1, TenantQuotaManager::default()) else {
+        return;
+    };
     let app = router_with_state(state);
 
     let timeout_response = app
@@ -347,9 +355,8 @@ async fn execute_reports_queue_timeout_when_capacity_is_held() {
         return;
     }
 
-    let state = AppState::new(
-        SandboxPool::new(1),
-        AuditLog::default(),
+    let Some(state) = runtime_test_state(
+        1,
         TenantQuotaManager::new(TenantQuotaConfig {
             max_concurrent_executions_per_tenant: 1,
             max_requests_per_minute: 120,
@@ -359,7 +366,9 @@ async fn execute_reports_queue_timeout_when_capacity_is_held() {
             max_queue_depth: 2,
             max_queue_timeout_ms: 50,
         }),
-    );
+    ) else {
+        return;
+    };
     let app = router_with_state(state);
 
     let active = tokio::spawn({
@@ -409,9 +418,8 @@ async fn execute_reports_capacity_rejected_when_queue_is_full() {
         return;
     }
 
-    let state = AppState::new(
-        SandboxPool::new(1),
-        AuditLog::default(),
+    let Some(state) = runtime_test_state(
+        1,
         TenantQuotaManager::new(TenantQuotaConfig {
             max_concurrent_executions_per_tenant: 1,
             max_requests_per_minute: 120,
@@ -421,7 +429,9 @@ async fn execute_reports_capacity_rejected_when_queue_is_full() {
             max_queue_depth: 1,
             max_queue_timeout_ms: 2_000,
         }),
-    );
+    ) else {
+        return;
+    };
     let app = router_with_state(state);
 
     let active = tokio::spawn({
@@ -491,11 +501,9 @@ async fn audits_capture_command_and_completion_details() {
         return;
     }
 
-    let state = AppState::new(
-        SandboxPool::new(1),
-        AuditLog::default(),
-        TenantQuotaManager::default(),
-    );
+    let Some(state) = runtime_test_state(1, TenantQuotaManager::default()) else {
+        return;
+    };
     let app = router_with_state(state);
 
     let request_id = "audit-command-details";
@@ -557,11 +565,9 @@ async fn audits_capture_limit_exceeded_details() {
         return;
     }
 
-    let state = AppState::new(
-        SandboxPool::new(1),
-        AuditLog::default(),
-        TenantQuotaManager::default(),
-    );
+    let Some(state) = runtime_test_state(1, TenantQuotaManager::default()) else {
+        return;
+    };
     let app = router_with_state(state);
 
     let request_id = "audit-limit-details";
@@ -613,16 +619,132 @@ async fn audits_capture_limit_exceeded_details() {
 }
 
 #[tokio::test]
+async fn audits_capture_network_attempt_details() {
+    if !python3_available().await {
+        return;
+    }
+
+    let Some(state) = runtime_test_state(1, TenantQuotaManager::default()) else {
+        return;
+    };
+    let app = router_with_state(state);
+
+    let request_id = "audit-network-details";
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/execute")
+                .header("content-type", "application/json")
+                .header("x-synapse-request-id", request_id)
+                .body(Body::from(
+                    json!({
+                        "language": "python",
+                        "code": "import socket\ntry:\n    socket.create_connection(('1.1.1.1', 80), timeout=1)\nexcept Exception:\n    pass\n",
+                        "timeout_ms": 5_000,
+                        "memory_limit_mb": 128
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let audit_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/audits/{request_id}"))
+                .header("x-synapse-tenant-id", "default")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(audit_response.status(), StatusCode::OK);
+    let body = to_bytes(audit_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let events: Value = serde_json::from_slice(&body).unwrap();
+    let items = events.as_array().unwrap();
+
+    assert!(items.iter().any(|event| {
+        event["kind"] == "network_attempt"
+            && event["fields"]["target"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("AF_INET")
+    }));
+}
+
+#[tokio::test]
+async fn audits_capture_process_spawn_attempt_details() {
+    if !python3_available().await {
+        return;
+    }
+
+    let Some(state) = runtime_test_state(1, TenantQuotaManager::default()) else {
+        return;
+    };
+    let app = router_with_state(state);
+
+    let request_id = "audit-process-details";
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/execute")
+                .header("content-type", "application/json")
+                .header("x-synapse-request-id", request_id)
+                .body(Body::from(
+                    json!({
+                        "language": "python",
+                        "code": "import subprocess\ntry:\n    subprocess.run(['/bin/sh', '-c', 'true'], check=False)\nexcept Exception:\n    pass\n",
+                        "timeout_ms": 5_000,
+                        "memory_limit_mb": 128
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let audit_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/audits/{request_id}"))
+                .header("x-synapse-tenant-id", "default")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(audit_response.status(), StatusCode::OK);
+    let body = to_bytes(audit_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let events: Value = serde_json::from_slice(&body).unwrap();
+    let items = events.as_array().unwrap();
+
+    assert!(items
+        .iter()
+        .any(|event| { event["kind"] == "process_spawn" }));
+}
+
+#[tokio::test]
 async fn stream_websocket_emits_lifecycle_events_and_closes() {
     if !python3_available().await {
         return;
     }
 
-    let state = AppState::new(
-        SandboxPool::new(1),
-        AuditLog::default(),
-        TenantQuotaManager::default(),
-    );
+    let Some(state) = runtime_test_state(1, TenantQuotaManager::default()) else {
+        return;
+    };
     let (addr, _server) = spawn_test_server(router_with_state(state)).await;
     let events = connect_and_collect_stream_events(
         addr,
@@ -659,11 +781,9 @@ async fn stream_websocket_reports_timeout_errors() {
         return;
     }
 
-    let state = AppState::new(
-        SandboxPool::new(1),
-        AuditLog::default(),
-        TenantQuotaManager::default(),
-    );
+    let Some(state) = runtime_test_state(1, TenantQuotaManager::default()) else {
+        return;
+    };
     let (addr, _server) = spawn_test_server(router_with_state(state)).await;
     let events = connect_and_collect_stream_events(
         addr,
@@ -728,11 +848,9 @@ async fn audit_lookup_requires_matching_tenant() {
         return;
     }
 
-    let state = AppState::new(
-        SandboxPool::new(1),
-        AuditLog::default(),
-        TenantQuotaManager::default(),
-    );
+    let Some(state) = runtime_test_state(1, TenantQuotaManager::default()) else {
+        return;
+    };
     let app = router_with_state(state);
     let request_id = unique_request_id("tenant-audit");
 
@@ -795,6 +913,41 @@ async fn python3_available() -> bool {
         .status()
         .await
         .is_ok()
+}
+
+fn runtime_test_app(pool_size: usize) -> Option<axum::Router> {
+    runtime_test_state(pool_size, TenantQuotaManager::default()).map(router_with_state)
+}
+
+fn runtime_test_state(pool_size: usize, quotas: TenantQuotaManager) -> Option<AppState> {
+    let registry = provision_python_runtime_registry()?;
+    Some(AppState::new_with_runtime_registry(
+        SandboxPool::new_with_runtime_registry(pool_size, registry.clone()),
+        AuditLog::default(),
+        quotas,
+        registry,
+    ))
+}
+
+fn provision_python_runtime_registry() -> Option<RuntimeRegistry> {
+    let python = find_command(&SystemProviders, "python3")?;
+    let root = unique_runtime_root("synapse-api-runtime");
+    let registry = RuntimeRegistry::from_root(&root);
+    registry.install("python", "system", &python).ok()?;
+    registry.activate("python", "system").ok()?;
+    Some(registry)
+}
+
+fn unique_runtime_root(prefix: &str) -> PathBuf {
+    let path = env::temp_dir().join(format!(
+        "{prefix}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = fs::remove_dir_all(&path);
+    path
 }
 
 async fn spawn_test_server(app: axum::Router) -> (SocketAddr, tokio::task::JoinHandle<()>) {

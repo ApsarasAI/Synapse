@@ -26,7 +26,6 @@ impl AppState {
         tenant_quotas: TenantQuotaManager,
         runtime_registry: RuntimeRegistry,
     ) -> Self {
-        let _ = runtime_registry.bootstrap_system_defaults();
         let scheduler = ExecutionScheduler::new(ExecutionSchedulerConfig::new(
             pool.metrics().configured_size,
             tenant_quotas.config().max_queue_depth,
@@ -71,7 +70,6 @@ impl AppState {
 pub fn default_state() -> AppState {
     let config = SynapseConfig::from_providers(&SystemProviders);
     let runtime_registry = RuntimeRegistry::default();
-    let _ = runtime_registry.bootstrap_system_defaults();
     AppState::new_with_runtime_registry(
         SandboxPool::new_with_runtime_registry(config.pool_size, runtime_registry.clone()),
         AuditLog::from_providers(&SystemProviders),

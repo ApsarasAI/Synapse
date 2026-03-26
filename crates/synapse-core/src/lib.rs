@@ -28,6 +28,8 @@ pub use executor::{
 };
 pub use pool::{PoolMetrics, SandboxPool};
 pub use providers::{find_command, temp_path, Providers, SystemProviders};
+#[cfg(target_os = "linux")]
+pub use runtime::probe_linux_sandbox_support;
 pub use runtimes::{
     InstalledRuntime, ResolvedRuntime, RuntimeInfo, RuntimeManifest, RuntimeRegistry,
 };

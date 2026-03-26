@@ -138,6 +138,7 @@ fn resolve_runtime(
 mod tests {
     use super::{resolve_runtime, validate_request};
     use crate::{ExecuteRequest, RuntimeRegistry, SynapseError};
+    use std::{env, fs, path::PathBuf};
 
     fn request() -> ExecuteRequest {
         ExecuteRequest {
@@ -150,6 +151,42 @@ mod tests {
             tenant_id: None,
             request_id: None,
         }
+    }
+
+    fn unique_root(prefix: &str) -> PathBuf {
+        let path = env::temp_dir().join(format!(
+            "{prefix}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        path
+    }
+
+    fn fake_runtime_binary(root: &PathBuf, name: &str) -> PathBuf {
+        fs::create_dir_all(root).unwrap();
+        let path = root.join(name);
+        fs::write(&path, b"#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = fs::metadata(&path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&path, permissions).unwrap();
+        }
+        path
+    }
+
+    fn registry_with_active_python() -> RuntimeRegistry {
+        let root = unique_root("synapse-service-runtime");
+        let registry = RuntimeRegistry::from_root(&root);
+        let binary = fake_runtime_binary(&root.join("src"), "python3");
+        registry.install("python", "3.12.5", &binary).unwrap();
+        registry.activate("python", "3.12.5").unwrap();
+        registry
     }
 
     #[test]
@@ -198,13 +235,14 @@ mod tests {
 
     #[test]
     fn resolve_runtime_accepts_python_aliases_case_insensitively() {
-        let registry = RuntimeRegistry::default();
+        let registry = registry_with_active_python();
         let python = resolve_runtime(&registry, &request()).unwrap();
         let mut alias_request = request();
         alias_request.language = "  PyThOn3  ".to_string();
         let python3 = resolve_runtime(&registry, &alias_request).unwrap();
 
         assert_eq!(python.info.language, python3.info.language);
+        let _ = fs::remove_dir_all(registry.root());
     }
 
     #[test]

@@ -6,9 +6,9 @@
 | 字段 | 内容 |
 | :--- | :--- |
 | 项目名称 | Synapse（寓意极小、极快） |
-| 当前版本 | v0.1.0 (MVP) |
+| 当前版本 | v0.2.0 (Phase 1 完成，进入 Phase 2) |
 | 技术栈 | Rust / Linux Kernel Features |
-| 更新日期 | 2024 年 |
+| 更新日期 | 2026 年 3 月 |
 
 名称含义：神经元之间传递信号的连接点。
 名称解读：大模型是大脑，代码执行是动作，而你的沙箱就是那个传递指令的"突触"。没有它，大脑有想法也动不了。
@@ -58,6 +58,28 @@ Slogan：Connect Thought to Action.（连接思想与行动）
 - **零依赖部署** — 单二进制文件，无需 Docker/K8s
 
 支持公有云 API 与私有化部署两种模式。
+
+### 产品现状（2026-03）
+
+**已完成核心能力：**
+
+| 能力 | 状态 | 说明 |
+|-----|------|-----|
+| 沙箱执行引擎 | ✅ 生产就绪 | Namespace/Seccomp/Cgroups 三层隔离 |
+| OverlayFS 文件系统 | ✅ 生产就绪 | 共享只读层 + 独立写层，支持池化重置 |
+| 审计日志 | ✅ 生产就绪 | syscall 级细粒度审计，支持事件检索 |
+| 多租户调度 | ✅ 生产就绪 | 配额、公平队列、背压机制 |
+| 资源限制 | ✅ 生产就绪 | 内存/CPU/wall timeout 独立控制 |
+| Runtime 管理 | ⚠️ MVP 可用 | CLI 支持显式 import/verify，仅 Python，host import 仍依赖宿主解释器 |
+
+**待完善能力：**
+
+| 能力 | 状态 | 优先级 |
+|-----|------|-------|
+| 多语言支持 | 🔴 待开发 | P2 |
+| Python SDK | 🔴 待开发 | P1 |
+| 性能验证 | ⚠️ 缺数据 | P1 |
+| 白名单 Seccomp | 🔴 待开发 | P2 |
 
 ---
 
@@ -589,14 +611,16 @@ synapse runtime pull nodejs-base:20
 
 ## 12. 非功能性需求
 
-| 维度 | 指标 | 说明 |
-| :--- | :--- | :--- |
-| 安全性 | 沙箱逃逸防护 | 四层纵深防御，详见 [第 6 章](#6-安全架构与威胁模型) |
-| 并发性能 | ≥ 200 QPS (MVP) / 500+ QPS (Phase 3) | 单机 4C8G 配置 |
-| 冷启动 | P99 < 50ms (MVP) / P99 < 5ms（预热池） | 预热池就绪后大幅降低 |
-| 可用性 | 99.9%（SaaS 模式） | 沙箱池降级 + 健康检查保证 |
-| 系统依赖 | 仅 Linux 内核 > 4.18 | 无需 Docker、K8s 等重型依赖 |
-| 分发方式 | 单一静态链接二进制 | 支持 `x86_64` 和 `arm64` |
+| 维度 | 指标 | 说明 | 验证状态 |
+| :--- | :--- | :--- | :--- |
+| 安全性 | 沙箱逃逸防护 | 四层纵深防御，详见 [第 6 章](#6-安全架构与威胁模型) | ✅ 已有逃逸测试套件 |
+| 并发性能 | ≥ 200 QPS (MVP) / 500+ QPS (Phase 3) | 单机 4C8G 配置 | ⚠️ 待 HTTP 负载测试验证 |
+| 冷启动 | P99 < 50ms (MVP) / P99 < 5ms（预热池） | 预热池就绪后大幅降低 | ⚠️ 待 HTTP 负载测试验证 |
+| 可用性 | 99.9%（SaaS 模式） | 沙箱池降级 + 健康检查保证 | 🔴 待 SaaS 部署 |
+| 系统依赖 | 仅 Linux 内核 > 4.18 | 无需 Docker、K8s 等重型依赖 | ✅ 已验证 |
+| 分发方式 | 单一静态链接二进制 | 支持 `x86_64` 和 `arm64` | ✅ 已支持 x86_64 |
+
+> **注**：性能指标（QPS、冷启动延迟）目前仅有 criterion 微基准测试数据，尚未进行端到端 HTTP 负载测试验证。建议在 Phase 2 完成 HTTP 压测后更新此表。
 
 ---
 
@@ -656,25 +680,27 @@ synapse runtime pull nodejs-base:20
 
 ### 14.2 开源 vs 闭源边界
 
-| 功能 | 开源 (Core) | 闭源 (Enterprise) |
-| :--- | :--- | :--- |
-| 沙箱引擎（Namespace/Seccomp/Cgroups） | ✅ | ✅ |
-| 沙箱预热池 | ✅ | ✅ |
-| OverlayFS 分层文件系统 | ✅ | ✅ |
-| 自适应 Seccomp Profile | ✅ | ✅ |
-| HTTP API (`POST /execute`) | ✅ | ✅ |
-| Synapsefile 运行时管理 | ✅ | ✅ |
-| 基础 Metrics (`/metrics`) | ✅ | ✅ |
-| Python / Node.js SDK | ✅ | ✅ |
-| WebSocket 流式输出 | ✅ | ✅ |
-| 审计日志（细粒度行为记录） | ❌ | ✅ |
-| 多租户管理 + 配额控制 | ❌ | ✅ |
-| SaaS 控制台（注册/API Key/计费） | ❌ | ✅ |
-| 优先级调度 | ❌ | ✅ |
-| SSO / LDAP 集成 | ❌ | ✅ |
-| 合规报告生成 | ❌ | ✅ |
-| 高级告警规则 | ❌ | ✅ |
-| License Key 管理 | ❌ | ✅ |
+> **注**：以下标注当前实现状态。部分原计划 Enterprise 专属功能已在开源版本中实现。
+
+| 功能 | 开源 (Core) | 闭源 (Enterprise) | 实现状态 |
+| :--- | :--- | :--- | :--- |
+| 沙箱引擎（Namespace/Seccomp/Cgroups） | ✅ | ✅ | ✅ 已实现 |
+| 沙箱预热池 | ✅ | ✅ | ✅ 已实现 |
+| OverlayFS 分层文件系统 | ✅ | ✅ | ✅ 已实现 |
+| 自适应 Seccomp Profile | ✅ | ✅ | 🔴 待开发 |
+| HTTP API (`POST /execute`) | ✅ | ✅ | ✅ 已实现 |
+| Synapsefile 运行时管理 | ✅ | ✅ | ⚠️ 部分实现 |
+| 基础 Metrics (`/metrics`) | ✅ | ✅ | ✅ 已实现 |
+| Python / Node.js SDK | ✅ | ✅ | 🔴 待开发 |
+| WebSocket 流式输出 | ✅ | ✅ | ⚠️ 基础实现 |
+| 审计日志（细粒度行为记录） | ✅ | ✅ | ✅ 已实现（原计划 Enterprise） |
+| 多租户管理 + 配额控制 | ✅ | ✅ | ✅ 已实现（原计划 Enterprise） |
+| SaaS 控制台（注册/API Key/计费） | ❌ | ✅ | 🔴 待开发 |
+| 优先级调度 | ❌ | ✅ | 🔴 待开发 |
+| SSO / LDAP 集成 | ❌ | ✅ | 🔴 待开发 |
+| 合规报告生成 | ❌ | ✅ | 🔴 待开发 |
+| 高级告警规则 | ❌ | ✅ | 🔴 待开发 |
+| License Key 管理 | ❌ | ✅ | 🔴 待开发 |
 
 ### 14.3 开源许可证选择
 
@@ -983,50 +1009,71 @@ jobs:
 
 ## 16. 开发路线图
 
-### Phase 1：核心验证 (MVP) — 4 周
+> **当前状态**：Phase 1 (MVP) 已完成，正在向 Phase 2 过渡。部分原计划 Phase 2/3 的功能已提前实现（审计日志、多租户配额）。
+
+### Phase 1：核心验证 (MVP) — 已完成 ✅
 
 ```
 目标：跑通"代码进去、结果出来"的完整链路，验证 < 5ms 启动承诺
+状态：已完成（2026-03）
 ```
 
-- [ ] 进程隔离（Namespace: PID / Mount / Network / IPC / UTS）
-- [ ] 文件系统隔离（pivot_root + OverlayFS 分层架构）
-- [ ] Seccomp 过滤（黑名单模式）
-- [ ] 沙箱预热池（Sandbox Pool）
-- [ ] Python 语言执行支持
-- [ ] 基础错误处理（超时 / OOM / 非法调用）
-- [ ] 基础 Metrics 端点（`/metrics`）
-- [ ] 单元测试 + 集成测试 + 逃逸测试套件
-- [ ] 性能基准测试（criterion）+ CI 回退检测
-- [ ] GitHub 开源 Core 版本（Apache 2.0）
-- [ ] 发布 v0.1.0
+- [x] 进程隔离（Namespace: PID / Mount / Network / IPC / UTS）
+- [x] 文件系统隔离（pivot_root + OverlayFS 分层架构）
+- [x] Seccomp 过滤（黑名单模式）
+- [x] 沙箱预热池（Sandbox Pool）
+- [x] Python 语言执行支持
+- [x] 基础错误处理（超时 / OOM / 非法调用）
+- [x] 基础 Metrics 端点（`/metrics`）
+- [x] 单元测试 + 集成测试 + 逃逸测试套件
+- [x] 性能基准测试（criterion）+ 发布门禁脚本
+- [x] GitHub 开源 Core 版本（Apache 2.0）
 
-### Phase 2：安全加固与开发者体验 — 3 周
+**已提前实现的功能（原计划 Phase 2/3）：**
+
+- [x] 审计日志功能（细粒度行为记录、syscall 审计）
+- [x] 多租户配额管理（并发限制、速率限制、公平调度）
+- [x] 全局执行队列与背压机制
+- [x] 资源限制（CPU 时间独立于 wall timeout）
+- [x] Runtime 版本管理（CLI：runtime list/verify/install/import-host/activate）
+
+### Phase 2：安全加固与开发者体验 — 进行中
 
 ```
-目标：白名单 Seccomp + 自适应 Profile + SDK，建立安全壁垒和开发者生态
+目标：白名单 Seccomp + SDK + 错误模型稳定，建立安全壁垒和开发者生态
+预计周期：4-6 周
 ```
 
-- [ ] Cgroups v2 资源限制（内存 / CPU / PID）
-- [ ] 断网模式 + 安全网络模式
+- [x] Cgroups v2 资源限制（内存 / CPU / PID）
+- [x] 断网模式（Network Namespace 隔离）
 - [ ] Seccomp 切换为白名单模式
 - [ ] 自适应 Seccomp Profile（静态分析 + 模板库 + learn 模式）
 - [ ] Python SDK 发布
-- [ ] WebSocket 流式输出
-- [ ] 多租户配额管理
+- [x] WebSocket 流式输出（基础实现，需完善）
+- [x] 多租户配额管理（已完成）
 - [ ] Fuzz 测试集成到 CI
-- [ ] 发布开发者预览版 HTTP API
+- [ ] 错误模型与 API 契约冻结
+- [ ] HTTP 负载测试与性能验证
 
-### Phase 3：商业化与高性能 — 4 周
+**Phase 2 当前阻塞项：**
+
+| 项目 | 状态 | 备注 |
+|-----|------|-----|
+| Python SDK | 待开发 | 无开发者工具包 |
+| 白名单 Seccomp | 待开发 | 当前为黑名单模式 |
+| 性能验证 | 待验证 | 无 HTTP 负载测试数据 |
+| 错误模型 | 部分完成 | 缺少细分内部错误类别 |
+
+### Phase 3：商业化与多运行时 — 待启动
 
 ```
-目标：多语言 + 审计 + SaaS 控制台，正式商业化
+目标：多语言 + SaaS 控制台，正式商业化
+预计周期：4-8 周
 ```
 
 - [ ] Node.js / Shell 脚本执行支持
 - [ ] Synapsefile 运行时管理 + 官方运行时仓库
 - [ ] SaaS 控制台（注册、API Key、用量统计、计费）
-- [ ] 审计日志功能
 - [ ] io_uring 异步调度（目标 500+ QPS）
 - [ ] Node.js SDK 发布
 - [ ] 压力测试自动化（wrk/k6）

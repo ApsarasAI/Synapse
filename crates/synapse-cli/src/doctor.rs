@@ -1,10 +1,10 @@
 use std::{fs, io};
 
-#[cfg(target_os = "linux")]
-use synapse_core::probe_cgroup_v2_support;
 use synapse_core::{
     find_command, temp_path, AuditLog, Providers, RuntimeRegistry, SystemProviders,
 };
+#[cfg(target_os = "linux")]
+use synapse_core::{probe_cgroup_v2_support, probe_linux_sandbox_support};
 
 #[derive(Debug)]
 struct DoctorCheck {
@@ -16,8 +16,8 @@ struct DoctorCheck {
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let providers = SystemProviders;
     let checks = vec![
-        command_check(&providers, "python3", "required to execute Python code"),
         sandbox_tool_check(&providers),
+        command_check(&providers, "strace", "required for syscall audit capture"),
         cgroup_v2_check(&providers),
         runtime_check(),
         audit_log_check(&providers),
@@ -59,19 +59,36 @@ fn command_check(
 }
 
 fn sandbox_tool_check(providers: &dyn Providers) -> DoctorCheck {
-    if let Some(path) = find_command(providers, "bwrap") {
+    if find_command(providers, "bwrap").is_none() {
         return DoctorCheck {
             name: "sandbox",
-            ok: true,
-            detail: format!("bubblewrap available ({})", path.display()),
+            ok: false,
+            detail: "bubblewrap is required for secure Linux execution; command not found in PATH"
+                .to_string(),
         };
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        match probe_linux_sandbox_support() {
+            Ok(detail) => DoctorCheck {
+                name: "sandbox",
+                ok: true,
+                detail,
+            },
+            Err(error) => DoctorCheck {
+                name: "sandbox",
+                ok: false,
+                detail: error.to_string(),
+            },
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
     DoctorCheck {
         name: "sandbox",
         ok: false,
-        detail: "bubblewrap is required for secure Linux execution; command not found in PATH"
-            .to_string(),
+        detail: "secure sandbox execution is only supported on Linux".to_string(),
     }
 }
 
@@ -128,13 +145,26 @@ fn temp_dir_check(providers: &dyn Providers) -> DoctorCheck {
 }
 
 fn runtime_check() -> DoctorCheck {
-    let runtimes = RuntimeRegistry::default().list();
-    let available = runtimes.iter().filter(|runtime| runtime.healthy).count();
-
-    DoctorCheck {
-        name: "runtime",
-        ok: available > 0,
-        detail: format!("{available} managed runtime(s) available"),
+    let registry = RuntimeRegistry::default();
+    match registry.verify("python", None) {
+        Ok(runtime) => DoctorCheck {
+            name: "runtime",
+            ok: true,
+            detail: format!(
+                "active runtime {}:{} ({})",
+                runtime.language,
+                runtime.version,
+                runtime.binary.display()
+            ),
+        },
+        Err(error) => DoctorCheck {
+            name: "runtime",
+            ok: false,
+            detail: format!(
+                "{}; import one explicitly with `synapse runtime import-host --activate --version system`",
+                error
+            ),
+        },
     }
 }
 

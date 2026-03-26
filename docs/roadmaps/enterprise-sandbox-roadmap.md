@@ -47,7 +47,7 @@
 
 当前问题：
 
-- 现在只是临时目录加 `bwrap` 绑定，不是真正的 runtime layer
+- 之前只是临时目录加 `bwrap` 绑定，不是真正的 runtime layer
 - 池化收益有限，重置方式也偏粗糙
 
 目标：
@@ -70,6 +70,12 @@
 - 每次执行的文件改动不会污染下一次执行
 - 连续高频执行后无残留 upper/work 目录
 
+当前进展（2026-03-26）：
+
+- Linux 执行链路现在通过 `bubblewrap` overlay 参数把 `/workspace` 挂成共享 lower layer + 每沙箱 `upper/work` 写层
+- 池化沙箱的 reset 已切换为重建写层目录，执行后的 `/workspace` 改动不会带到下一次运行
+- 已增加集成测试验证跨运行写隔离和 reset 后仅保留 `upper/work` 两类目录
+
 ### P0.2 Runtime 供应链治理
 
 当前问题：
@@ -87,7 +93,7 @@
 
 - runtime manifest 结构
 - runtime store 目录规范
-- CLI：`runtime list/install/activate`
+- CLI：`runtime list/verify/install/import-host/activate`
 - hash 校验与加载逻辑
 
 验收标准：
@@ -99,9 +105,9 @@
 当前进展（2026-03-26）：
 
 - 已增加 managed runtime store，包含 `runtimes/<language>/<version>/manifest.json` 和 active version 指针
-- 已支持 `synapse runtime list/install/activate`
+- 已支持 `synapse runtime list/verify/install/import-host/activate`
 - runtime 解析已加入 SHA-256 完整性校验，损坏或缺失时会返回明确 `runtime_unavailable`
-- 当前仍仅支持 Python，且默认 bootstrap 仍会从宿主 `python3` 导入一个 `python:system` 版本，距离完全独立 runtime 供应链还有差距
+- 当前仍仅支持 Python，且显式 `import-host` 工作流仍会从宿主 `python3` 导入 `python:system`，距离完全独立 runtime 供应链还有差距
 
 ### P0.3 容量控制与执行调度
 
@@ -157,7 +163,8 @@
 当前进展（2026-03-26）：
 
 - 已有文件系统隔离、环境变量隔离、fork 阻断、timeout、OOM 和容量争用相关测试
-- 仍缺 network 尝试、资源泄漏和发布前自动门禁这几类更系统化的基线资产
+- 已补 network 尝试审计测试、进程创建审计测试、池化 reset 隔离测试，以及单入口 `scripts/p0_gate.sh` 发布门禁
+- 资源泄漏基线目前仍主要通过池化/重置测试间接覆盖，后续可继续补更强的 mount/zombie 专项探针
 
 ## Phase 1：6 到 12 周
 

@@ -2,3 +2,6 @@
 /.idea/
 /.vscode/
 *.log
+docs/session-snapshots/*.tmp
+docs/commands/review-findings-*.md
+docs/deep_wiki.md

@@ -55,6 +55,9 @@ fn parse_strace_line(request_id: &str, tenant_id: Option<&str>, line: &str) -> O
 
     if starts_with_any(trimmed, &["open(", "openat(", "access(", "stat(", "lstat("]) {
         let path = first_quoted(trimmed)?;
+        if !interesting_file_path(&path) {
+            return None;
+        }
         let action = if trimmed.contains("O_WRONLY") || trimmed.contains("O_RDWR") {
             "write"
         } else {
@@ -74,6 +77,11 @@ fn parse_strace_line(request_id: &str, tenant_id: Option<&str>, line: &str) -> O
     }
 
     if starts_with_any(trimmed, &["socket(", "connect(", "sendto("]) {
+        if trimmed.starts_with("socket(")
+            && !(trimmed.contains("AF_INET") || trimmed.contains("AF_INET6"))
+        {
+            return None;
+        }
         let target = extract_network_target(trimmed);
         return Some(syscall_event(
             request_id,
@@ -90,6 +98,9 @@ fn parse_strace_line(request_id: &str, tenant_id: Option<&str>, line: &str) -> O
     ) {
         let mut fields = vec![("syscall", syscall_name(trimmed))];
         if let Some(path) = first_quoted(trimmed) {
+            if ignored_process_path(&path) {
+                return None;
+            }
             fields.push(("path", path));
         }
         return Some(syscall_event(
@@ -122,6 +133,16 @@ fn syscall_event(
 
 fn starts_with_any(value: &str, prefixes: &[&str]) -> bool {
     prefixes.iter().any(|prefix| value.starts_with(prefix))
+}
+
+fn interesting_file_path(path: &str) -> bool {
+    path.starts_with("/workspace")
+        || path.starts_with("/tmp")
+        || matches!(path, "/etc/passwd" | "/etc/shadow")
+}
+
+fn ignored_process_path(path: &str) -> bool {
+    path.contains("/bwrap") || path.contains("/strace")
 }
 
 fn syscall_name(line: &str) -> String {
@@ -185,6 +206,36 @@ mod tests {
         .unwrap();
         assert_eq!(event.kind, AuditEventKind::NetworkAttempt);
         assert_eq!(event.fields["target"], "1.1.1.1:80");
+    }
+
+    #[test]
+    fn skips_wrapper_process_exec_events() {
+        let event = parse_strace_line(
+            "req-1",
+            Some("tenant-a"),
+            "execve(\"/usr/bin/bwrap\", [\"bwrap\"], 0x0) = 0",
+        );
+        assert!(event.is_none());
+    }
+
+    #[test]
+    fn skips_non_inet_socket_noise() {
+        let event = parse_strace_line(
+            "req-1",
+            Some("tenant-a"),
+            "socket(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC|SOCK_NONBLOCK, 0) = -1 EPERM (Operation not permitted)",
+        );
+        assert!(event.is_none());
+    }
+
+    #[test]
+    fn skips_runtime_loader_file_access_noise() {
+        let event = parse_strace_line(
+            "req-1",
+            Some("tenant-a"),
+            "openat(AT_FDCWD, \"/etc/ld.so.cache\", O_RDONLY|O_CLOEXEC) = 3",
+        );
+        assert!(event.is_none());
     }
 
     #[test]
