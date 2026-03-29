@@ -2,12 +2,11 @@ import inspect
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Dict, Mapping, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Mapping, Optional
 from urllib.parse import urlparse, urlunparse
 
-import httpx
-import websockets
-
+if TYPE_CHECKING:
+    import httpx
 
 class SynapseAPIError(RuntimeError):
     def __init__(self, code: str, message: str, status_code: int | None = None):
@@ -70,6 +69,7 @@ class SynapseClient:
             request_id=request_id,
             tenant_id=tenant_id,
         )
+        httpx = _import_httpx()
         with httpx.Client(timeout=self._config.timeout) as client:
             response = client.post(
                 f"{self._config.base_url.rstrip('/')}/execute",
@@ -100,6 +100,7 @@ class SynapseClient:
             request_id=request_id,
             tenant_id=tenant_id,
         )
+        websockets = _import_websockets()
         ws_url = _http_to_ws_url(f"{self._config.base_url.rstrip('/')}/execute/stream")
         async with websockets.connect(ws_url, **_websocket_connect_kwargs(
             self._headers(tenant_id or self._config.tenant_id),
@@ -153,7 +154,7 @@ class SynapseClient:
             headers["x-synapse-tenant-id"] = tenant_id
         return headers
 
-    def _decode_response(self, response: httpx.Response) -> Dict[str, Any]:
+    def _decode_response(self, response: "httpx.Response") -> Dict[str, Any]:
         data = response.json()
         error = data.get("error")
         if error:
@@ -172,6 +173,26 @@ def _error_from_code(
 ) -> SynapseAPIError:
     error_type = ERROR_TYPES.get(code, SynapseAPIError)
     return error_type(code=code, message=message, status_code=status_code)
+
+
+def _import_httpx():
+    try:
+        import httpx
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "httpx is required for SynapseClient.execute(); install sdk/python dependencies first"
+        ) from exc
+    return httpx
+
+
+def _import_websockets():
+    try:
+        import websockets
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "websockets is required for SynapseClient.execute_stream(); install sdk/python dependencies first"
+        ) from exc
+    return websockets
 
 
 def _websocket_connect_kwargs(

@@ -1,12 +1,31 @@
-# API Reference
+# API Reference v1
 
-Synapse exposes a small HTTP surface intended for developer-preview integrations.
+Synapse v1 exposes a small HTTP and websocket surface for enterprise agent execution.
 
-## Stability
+## v1 Contract
 
-- `GET /health` is the most stable endpoint.
-- `POST /execute`, `GET /audits/:request_id`, and `GET /metrics` may evolve during `0.x`.
-- Field names and metric dimensions should be treated as preview-level unless documented otherwise in a release note.
+The v1 integration surface is:
+
+- `GET /health`
+- `POST /execute`
+- `GET /audits/:request_id`
+- `GET /metrics`
+- `GET /execute/stream`
+
+The contract frozen for v1 is:
+
+- request and response field names documented in this file
+- request correlation with `request_id` and `tenant_id`
+- documented error code strings
+- documented HTTP status mapping for synchronous calls
+- websocket stream event names `started`, `stdout`, `stderr`, `completed`, `error`
+
+Out of scope for v1:
+
+- backward compatibility for undocumented fields
+- browser or desktop execution APIs
+- multi-language runtime APIs
+- hosted SaaS-specific control plane APIs
 
 ## Authentication
 
@@ -15,7 +34,7 @@ Synapse exposes a small HTTP surface intended for developer-preview integrations
   - `POST /execute`
   - `GET /audits/:request_id`
   - `GET /metrics`
-  - `GET|POST /execute/stream`
+  - `GET /execute/stream`
 
 Tenant selection:
 
@@ -92,6 +111,12 @@ Important request fields:
 - `tenant_id`: optional, defaults to `default`
 - `request_id`: optional, may also come from `x-synapse-request-id`
 - `network_policy`: defaults to `{"mode":"disabled"}`
+
+Notes:
+
+- `network_policy.mode = "allow_list"` is currently rejected with `sandbox_policy_blocked`
+- empty or blank `tenant_id` values normalize to `default`
+- if both payload and header provide `tenant_id`, the payload value wins after validation
 
 Successful response example:
 
@@ -170,6 +195,50 @@ Observed HTTP status mapping:
 - `503`: `capacity_rejected`
 - `500`: `audit_failed`, `io_error`, `execution_failed`
 
+## GET /execute/stream
+
+Stream one execution over websocket. The server accepts:
+
+- websocket upgrade on `GET /execute/stream`, then one initial JSON message
+
+Example:
+
+```python
+import asyncio
+from synapse_sdk import SynapseClient, SynapseClientConfig
+
+async def main() -> None:
+    client = SynapseClient(SynapseClientConfig(base_url="http://127.0.0.1:8080"))
+    async for event in client.execute_stream(
+        "print('stream ok')\n",
+        request_id="stream-demo",
+    ):
+        print(event)
+
+asyncio.run(main())
+```
+
+Event shapes:
+
+Each websocket message is a JSON object with this envelope:
+
+```json
+{
+  "event": "stdout",
+  "fields": {
+    "data": "stream ok\n"
+  }
+}
+```
+
+Event payloads inside `fields`:
+
+- `started`: `request_id`, `tenant_id`
+- `stdout`: `data`
+- `stderr`: `data`
+- `completed`: `request_id`, `tenant_id`, `exit_code`, `duration_ms`; may also include `stdout_truncated`, `stderr_truncated`, `error_code`, `error`
+- `error`: `error_code`, `error`; emitted when the request payload is invalid before execution starts
+
 ## GET /audits/:request_id
 
 Return the persisted audit trail for a request id.
@@ -221,4 +290,4 @@ Representative metrics:
 - `synapse_execute_audit_failed_total`
 - `synapse_tenant_max_concurrency`
 
-Metric names and dimensions are still preview-level in `0.x`.
+Metric names listed above are part of the v1 operational contract for release-gate and PoC validation.

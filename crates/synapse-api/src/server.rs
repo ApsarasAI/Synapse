@@ -49,9 +49,7 @@ pub fn router_with_state(state: AppState) -> Router {
         )
         .route(
             "/execute/stream",
-            get(stream_execution_websocket)
-                .post(stream_execution_legacy)
-                .route_layer(protected_layer),
+            get(stream_execution_websocket).route_layer(protected_layer),
         )
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -304,16 +302,6 @@ async fn stream_execution_websocket(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_stream_websocket(socket, state, principal, headers))
-}
-
-async fn stream_execution_legacy(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-    Extension(principal): Extension<AuthPrincipal>,
-    headers: HeaderMap,
-    Json(req): Json<ExecuteRequest>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_stream(socket, state, principal, headers, req))
 }
 
 async fn handle_stream(
