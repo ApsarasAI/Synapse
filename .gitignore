@@ -1,6 +1,11 @@
 /target/
 /.idea/
 /.vscode/
+.venv*/
+__pycache__/
+*.py[cod]
+*.egg-info/
+sdk/python/build/
 *.log
 docs/session-snapshots/*.tmp
 docs/commands/review-findings-*.md

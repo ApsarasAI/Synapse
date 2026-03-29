@@ -23,12 +23,16 @@
 
 - `product/product.md`
   - 产品需求文档
+- `product/go-to-market-plan.md`
+  - 首版产品化、市场切入、ICP、定价与 GTM 方案
 - `architecture/tech-design.md`
   - 技术设计文档
 - `architecture/overlayfs-solution-analysis.md`
   - OverlayFS 方案分析
 - `plans/architecture-refactor-plan.md`
   - 架构改造计划
+- `plans/go-to-market-execution-plan.md`
+  - 首版产品化执行计划，覆盖范围冻结、交付物、PoC 和 GTM 推进
 - `plans/pmo.md`
   - 研发排期
 - `plans/todo.md`
@@ -49,3 +53,18 @@
 - 迭代计划、执行计划、待办清单放入 `plans/`
 - 版本路线和里程碑规划放入 `roadmaps/`
 - 临时会话记录仅放入 `session-snapshots/`
+## Productization
+
+- `product/v1-scope.md`
+- `product/not-in-v1.md`
+- `product/ideal-customer-profile.md`
+- `product/icp-target-list-template.md`
+- `product/security-whitepaper.md`
+- `product/sales-messaging.md`
+- `product/poc-playbook.md`
+- `product/pricing-draft.md`
+- `quickstart/enterprise-poc-guide.md`
+
+## Plans
+
+- `plans/go-to-market-execution-plan.md`
