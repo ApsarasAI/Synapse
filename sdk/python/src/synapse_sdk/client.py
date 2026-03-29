@@ -1,6 +1,7 @@
 import inspect
 import json
 import re
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Mapping, Optional
 from urllib.error import HTTPError, URLError
@@ -36,6 +37,8 @@ ERROR_TYPES = {
     "tenant_forbidden": TenantForbiddenError,
 }
 
+RETRYABLE_STATUS_CODES = frozenset({408, 429, 503})
+
 
 @dataclass(slots=True)
 class SynapseClientConfig:
@@ -43,6 +46,8 @@ class SynapseClientConfig:
     token: Optional[str] = None
     tenant_id: Optional[str] = None
     timeout: float = 30.0
+    max_retries: int = 0
+    retry_backoff_ms: int = 100
 
 
 class SynapseClient:
@@ -76,6 +81,8 @@ class SynapseClient:
             payload,
             self._headers(tenant_id or self._config.tenant_id),
             self._config.timeout,
+            self._config.max_retries,
+            self._config.retry_backoff_ms,
         )
         return self._decode_response(response)
 
@@ -190,6 +197,37 @@ def _post_json(
     payload: Mapping[str, Any],
     headers: Mapping[str, str],
     timeout: float,
+    max_retries: int = 0,
+    retry_backoff_ms: int = 100,
+):
+    attempts = max(max_retries, 0) + 1
+    last_exception: Exception | None = None
+
+    for attempt in range(attempts):
+        try:
+            response = _post_json_once(url, payload, headers, timeout)
+        except RuntimeError as exc:
+            last_exception = exc
+            if attempt + 1 >= attempts:
+                raise
+            time.sleep(_retry_delay_seconds(retry_backoff_ms, attempt))
+            continue
+
+        if response.status_code not in RETRYABLE_STATUS_CODES or attempt + 1 >= attempts:
+            return response
+
+        time.sleep(_retry_delay_seconds(retry_backoff_ms, attempt))
+
+    if last_exception is not None:
+        raise last_exception
+    raise RuntimeError("failed to post request to Synapse API")
+
+
+def _post_json_once(
+    url: str,
+    payload: Mapping[str, Any],
+    headers: Mapping[str, str],
+    timeout: float,
 ):
     httpx = _import_httpx()
     if httpx is not None:
@@ -261,6 +299,10 @@ def _websocket_connect_kwargs(
 def _normalize_error_code(code: str) -> str:
     normalized = re.sub(r"(?<!^)(?=[A-Z])", "_", code).replace("-", "_")
     return normalized.strip().lower()
+
+
+def _retry_delay_seconds(retry_backoff_ms: int, attempt: int) -> float:
+    return max(retry_backoff_ms, 0) * (attempt + 1) / 1000.0
 
 
 def _http_to_ws_url(url: str) -> str:

@@ -9,9 +9,13 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from synapse_sdk.client import (
+    RETRYABLE_STATUS_CODES,
     SynapseAPIError,
     SynapseClient,
     SynapseClientConfig,
+    _StdlibResponse,
+    _post_json,
+    _retry_delay_seconds,
     _websocket_connect_kwargs,
 )
 
@@ -61,6 +65,102 @@ class _FakeWebsocketsModule:
 
 
 class SynapseClientTests(unittest.TestCase):
+    def test_retry_delay_scales_linearly(self):
+        self.assertEqual(_retry_delay_seconds(100, 0), 0.1)
+        self.assertEqual(_retry_delay_seconds(100, 2), 0.3)
+        self.assertEqual(_retry_delay_seconds(-1, 1), 0.0)
+
+    def test_post_json_retries_retryable_status_codes(self):
+        responses = iter(
+            [
+                _StdlibResponse(503, '{"error":{"code":"capacity_rejected","message":"busy"}}'),
+                _StdlibResponse(200, '{"stdout":"ok","stderr":"","exit_code":0}'),
+            ]
+        )
+
+        with mock.patch(
+            "synapse_sdk.client._post_json_once",
+            side_effect=lambda *_args, **_kwargs: next(responses),
+        ) as post_once:
+            with mock.patch("synapse_sdk.client.time.sleep") as sleep:
+                response = _post_json(
+                    "http://synapse.test/execute",
+                    {"language": "python", "code": "print('ok')"},
+                    {"content-type": "application/json"},
+                    3.0,
+                    max_retries=2,
+                    retry_backoff_ms=25,
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(post_once.call_count, 2)
+        sleep.assert_called_once_with(0.025)
+
+    def test_post_json_does_not_retry_non_retryable_status_codes(self):
+        with mock.patch(
+            "synapse_sdk.client._post_json_once",
+            return_value=_StdlibResponse(
+                401,
+                '{"error":{"code":"auth_invalid","message":"bad token"}}',
+            ),
+        ) as post_once:
+            with mock.patch("synapse_sdk.client.time.sleep") as sleep:
+                response = _post_json(
+                    "http://synapse.test/execute",
+                    {"language": "python", "code": "print('ok')"},
+                    {"content-type": "application/json"},
+                    3.0,
+                    max_retries=3,
+                    retry_backoff_ms=25,
+                )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(post_once.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_post_json_retries_transport_failures(self):
+        with mock.patch(
+            "synapse_sdk.client._post_json_once",
+            side_effect=[
+                RuntimeError("failed to connect to Synapse API: timeout"),
+                _StdlibResponse(200, '{"stdout":"ok","stderr":"","exit_code":0}'),
+            ],
+        ) as post_once:
+            with mock.patch("synapse_sdk.client.time.sleep") as sleep:
+                response = _post_json(
+                    "http://synapse.test/execute",
+                    {"language": "python", "code": "print('ok')"},
+                    {"content-type": "application/json"},
+                    3.0,
+                    max_retries=1,
+                    retry_backoff_ms=10,
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(post_once.call_count, 2)
+        sleep.assert_called_once_with(0.01)
+
+    def test_execute_uses_retrying_post_json(self):
+        client = SynapseClient(
+            SynapseClientConfig(
+                base_url="http://synapse.test",
+                max_retries=2,
+                retry_backoff_ms=75,
+            )
+        )
+
+        with mock.patch(
+            "synapse_sdk.client._post_json",
+            return_value=_StdlibResponse(
+                200,
+                '{"stdout":"ok","stderr":"","exit_code":0}',
+            ),
+        ) as post_json:
+            response = client.execute("print('ok')\n")
+
+        self.assertEqual(response["stdout"], "ok")
+        self.assertEqual(post_json.call_args.args[4:], (2, 75))
+
     def test_websocket_connect_kwargs_supports_additional_headers(self):
         fake_module = types.SimpleNamespace(connect=_DummyConnect())
         with mock.patch("inspect.signature") as signature:
@@ -133,6 +233,9 @@ class SynapseClientTests(unittest.TestCase):
             )
 
         asyncio.run(run_test())
+
+    def test_retryable_status_codes_match_transient_failures(self):
+        self.assertEqual(RETRYABLE_STATUS_CODES, {408, 429, 503})
 
     def test_execute_stream_maps_error_events(self):
         async def run_test():

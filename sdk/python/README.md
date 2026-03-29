@@ -9,6 +9,7 @@ Minimal Python SDK for the Synapse v1 HTTP and websocket APIs.
 - bearer token header injection
 - tenant header injection
 - basic error mapping
+- request timeout and basic retry handling for transient execute failures
 
 ## Install
 
@@ -26,6 +27,9 @@ client = SynapseClient(
         base_url="http://127.0.0.1:8080",
         token="dev-token",
         tenant_id="default",
+        timeout=30.0,
+        max_retries=2,
+        retry_backoff_ms=100,
     )
 )
 
