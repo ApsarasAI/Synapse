@@ -30,3 +30,7 @@
 - 团队执行能力
 
 总分越高，越优先进入设计合作客户名单。
+
+推荐联动使用：
+
+- `docs/product/customer-validation-log-template.md`

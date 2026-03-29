@@ -6,6 +6,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEMO_SCRIPT = REPO_ROOT / "docs" / "product" / "demo-script.md"
 OBJECTIONS_LOG = REPO_ROOT / "docs" / "product" / "objections-log-template.md"
 POC_PLAYBOOK = REPO_ROOT / "docs" / "product" / "poc-playbook.md"
+CUSTOMER_VALIDATION_LOG = REPO_ROOT / "docs" / "product" / "customer-validation-log-template.md"
 
 
 class GtmAssetTests(unittest.TestCase):
@@ -37,6 +38,18 @@ class GtmAssetTests(unittest.TestCase):
     def test_poc_playbook_mentions_objections_output(self):
         content = POC_PLAYBOOK.read_text()
         self.assertIn("objections 列表", content)
+
+    def test_customer_validation_log_template_covers_required_fields(self):
+        content = CUSTOMER_VALIDATION_LOG.read_text()
+
+        for expected in (
+            "# Customer Validation Log Template",
+            "| Top Questions | 客户最关心的 3 到 5 个问题 |",
+            "| Current Answers | 当前统一回答 |",
+            "| Decision | `advance`, `hold`, `stop`, `follow_up` |",
+            "## 5. 周度复盘建议",
+        ):
+            self.assertIn(expected, content)
 
 
 if __name__ == "__main__":

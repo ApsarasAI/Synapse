@@ -30,6 +30,7 @@
   - `docs/product/pricing-draft.md`
   - `docs/product/demo-script.md`
   - `docs/product/objections-log-template.md`
+  - `docs/product/customer-validation-log-template.md`
 
 ### 0.2 部分完成，仍需继续执行
 
@@ -40,8 +41,8 @@
 
 ### 0.3 当前明确未完成或无法仅凭仓库证明已完成
 
-- D1 首批 ICP 名单是否已真实用于外部联系，仓库内无法证明。
-- D6 是否已完成至少一轮客户 objections 记录，仓库内暂无访谈或反馈记录。
+- D1 首批 ICP 名单是否已真实用于外部联系，仓库内仍无法证明。
+- D6 是否已完成至少一轮真实客户 objections 记录，仓库内仍暂无访谈或反馈记录。
 - 8.4 中“至少完成一轮外部客户访谈或设计合作客户触达”，仓库内暂无可验证证据。
 
 ### 0.4 当前执行策略
