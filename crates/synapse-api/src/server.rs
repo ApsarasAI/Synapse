@@ -47,6 +47,7 @@ struct AdminRequestsQuery {
 struct AdminOverviewResponse {
     service: AdminServiceStatus,
     metrics: AdminMetricsSnapshot,
+    alerts: Vec<AdminAlert>,
     top_error_codes: Vec<AdminErrorCount>,
     recent_failures: Vec<RequestSummary>,
 }
@@ -79,6 +80,14 @@ struct AdminMetricsSnapshot {
 #[derive(Debug, Serialize)]
 struct AdminErrorCount {
     code: String,
+    count: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminAlert {
+    severity: &'static str,
+    code: &'static str,
+    message: &'static str,
     count: u64,
 }
 
@@ -309,6 +318,7 @@ async fn admin_overview(
                     stdout_truncated_total: snapshot.stdout_truncated_total,
                     stderr_truncated_total: snapshot.stderr_truncated_total,
                 },
+                alerts: build_admin_alerts(&snapshot),
                 top_error_codes,
                 recent_failures,
             })
@@ -1054,6 +1064,58 @@ fn build_request_summary(
             .as_ref()
             .map(|runtime| runtime.resolved_version.clone()),
     }
+}
+
+fn build_admin_alerts(snapshot: &crate::metrics::ExecutionMetricsSnapshot) -> Vec<AdminAlert> {
+    let mut alerts = Vec::new();
+
+    if snapshot.runtime_unavailable_total > 0 {
+        alerts.push(AdminAlert {
+            severity: "critical",
+            code: "runtime_unavailable",
+            message: "runtime verification or activation requires attention",
+            count: snapshot.runtime_unavailable_total,
+        });
+    }
+    if snapshot.capacity_rejected_total > 0 || snapshot.queue_timeout_total > 0 {
+        alerts.push(AdminAlert {
+            severity: "high",
+            code: "capacity_pressure",
+            message: "queue saturation or capacity rejection detected",
+            count: snapshot.capacity_rejected_total + snapshot.queue_timeout_total,
+        });
+    }
+    if snapshot.rate_limited_total > 0 || snapshot.quota_exceeded_total > 0 {
+        alerts.push(AdminAlert {
+            severity: "medium",
+            code: "tenant_limits",
+            message: "tenant rate limiting or quota enforcement triggered",
+            count: snapshot.rate_limited_total + snapshot.quota_exceeded_total,
+        });
+    }
+    if snapshot.wall_timeout_total > 0
+        || snapshot.cpu_time_limit_exceeded_total > 0
+        || snapshot.memory_limit_exceeded_total > 0
+    {
+        alerts.push(AdminAlert {
+            severity: "medium",
+            code: "execution_limits",
+            message: "execution timeout or resource limit violations detected",
+            count: snapshot.wall_timeout_total
+                + snapshot.cpu_time_limit_exceeded_total
+                + snapshot.memory_limit_exceeded_total,
+        });
+    }
+    if snapshot.sandbox_policy_blocked_total > 0 {
+        alerts.push(AdminAlert {
+            severity: "medium",
+            code: "sandbox_policy",
+            message: "sandbox policy blocked one or more requests",
+            count: snapshot.sandbox_policy_blocked_total,
+        });
+    }
+
+    alerts
 }
 
 fn admin_summary_query(

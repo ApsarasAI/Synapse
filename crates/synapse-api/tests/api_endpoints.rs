@@ -15,7 +15,7 @@ use synapse_api::{
     server::{router, router_with_state, AppState},
 };
 use synapse_core::{
-    audit_event, find_command, AuditEventKind, AuditLog, RequestStatus, RequestSummary,
+    audit_event, find_command, AuditEventKind, AuditLog, ErrorCode, RequestStatus, RequestSummary,
     RequestSummaryStore, RuntimeRegistry, SandboxPool, SystemProviders, TenantQuotaConfig,
     TenantQuotaManager,
 };
@@ -1188,6 +1188,16 @@ async fn admin_overview_reports_recent_failures_and_error_counts() {
         .unwrap()
         .iter()
         .any(|item| item["code"] == "wall_timeout"));
+    assert!(body["alerts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["code"] == "runtime_unavailable"));
+    assert!(body["alerts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["code"] == "capacity_pressure"));
 }
 
 #[tokio::test]
@@ -1343,6 +1353,15 @@ fn seeded_admin_state() -> AppState {
             )],
         )
         .unwrap();
+    state
+        .execution_metrics()
+        .record_error_code(ErrorCode::RuntimeUnavailable);
+    state
+        .execution_metrics()
+        .record_error_code(ErrorCode::CapacityRejected);
+    state
+        .execution_metrics()
+        .record_error_code(ErrorCode::WallTimeout);
 
     state
 }
