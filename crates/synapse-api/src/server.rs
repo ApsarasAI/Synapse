@@ -22,6 +22,7 @@ use tracing::{error, info, instrument};
 
 pub use crate::app::AppState;
 use crate::{
+    admin_console,
     app::{default_state, AuthPrincipal},
     metrics::ExecutionLifecycle,
 };
@@ -162,6 +163,7 @@ pub fn router_with_state(state: AppState) -> Router {
             "/admin/overview",
             get(admin_overview).route_layer(protected_layer.clone()),
         )
+        .route("/admin/console", get(admin_console_page))
         .route(
             "/admin/requests",
             get(admin_list_requests).route_layer(protected_layer.clone()),
@@ -326,6 +328,10 @@ async fn admin_overview(
         }
         Err(error) => map_error(error).into_response(),
     }
+}
+
+async fn admin_console_page(_state: State<AppState>) -> impl IntoResponse {
+    admin_console::page()
 }
 
 async fn admin_list_requests(

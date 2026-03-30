@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Synapse Ops Console</title>
+  <style>
+    :root {
+      --bg: #f3efe6;
+      --surface: rgba(255, 250, 242, 0.86);
+      --surface-strong: #fffaf0;
+      --ink: #17212b;
+      --muted: #546171;
+      --line: rgba(23, 33, 43, 0.12);
+      --accent: #0d7c66;
+      --accent-strong: #0b5d4d;
+      --warn: #d97a00;
+      --danger: #b23a2c;
+      --shadow: 0 18px 50px rgba(23, 33, 43, 0.12);
+      --radius: 18px;
+      --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+      --sans: "Space Grotesk", "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(13, 124, 102, 0.22), transparent 30%),
+        radial-gradient(circle at top right, rgba(217, 122, 0, 0.16), transparent 24%),
+        linear-gradient(180deg, #f5f0e6 0%, #ece7dc 100%);
+    }
+
+    a { color: inherit; }
+
+    .shell {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 32px 20px 48px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+
+    .hero-main {
+      padding: 28px;
+      min-height: 220px;
+      background:
+        linear-gradient(135deg, rgba(255, 250, 240, 0.92), rgba(255, 255, 255, 0.72)),
+        linear-gradient(160deg, rgba(13, 124, 102, 0.18), rgba(217, 122, 0, 0.10));
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent-strong);
+      background: rgba(13, 124, 102, 0.10);
+    }
+
+    h1 {
+      margin: 16px 0 10px;
+      font-size: clamp(36px, 4vw, 56px);
+      line-height: 0.98;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      max-width: 62ch;
+    }
+
+    .hero-side {
+      display: grid;
+      gap: 14px;
+      padding: 18px;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+
+    input, select, button, textarea {
+      font: inherit;
+    }
+
+    input, select {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: var(--surface-strong);
+      border-radius: 12px;
+      padding: 11px 12px;
+      color: var(--ink);
+    }
+
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 11px 14px;
+      cursor: pointer;
+      background: var(--accent);
+      color: white;
+      font-weight: 600;
+    }
+
+    button.secondary {
+      background: rgba(23, 33, 43, 0.08);
+      color: var(--ink);
+    }
+
+    button.ghost {
+      background: transparent;
+      border: 1px solid var(--line);
+      color: var(--ink);
+    }
+
+    .status-bar {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-top: 18px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 10px;
+      margin: 20px 0 18px;
+      flex-wrap: wrap;
+    }
+
+    .tab {
+      background: rgba(255, 255, 255, 0.55);
+      color: var(--muted);
+    }
+
+    .tab.active {
+      background: var(--ink);
+      color: white;
+    }
+
+    .view { display: none; }
+    .view.active { display: block; }
+
+    .grid {
+      display: grid;
+      gap: 18px;
+    }
+
+    .metric-grid {
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+
+    .metric-card, .section {
+      padding: 18px;
+    }
+
+    .kicker {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .metric-value {
+      margin: 0;
+      font-size: 34px;
+      font-weight: 700;
+    }
+
+    .section h2, .section h3 {
+      margin: 0 0 14px;
+      font-size: 20px;
+    }
+
+    .two-up {
+      grid-template-columns: 1.05fr 0.95fr;
+    }
+
+    .alert-list, .stack, .summary-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .alert-item, .summary-item {
+      padding: 14px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.55);
+    }
+
+    .severity-critical { border-left: 6px solid var(--danger); }
+    .severity-warning { border-left: 6px solid var(--warn); }
+    .severity-info { border-left: 6px solid var(--accent); }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: rgba(23, 33, 43, 0.08);
+      font-size: 12px;
+    }
+
+    .pill.error {
+      background: rgba(178, 58, 44, 0.12);
+      color: var(--danger);
+    }
+
+    .pill.success {
+      background: rgba(13, 124, 102, 0.12);
+      color: var(--accent-strong);
+    }
+
+    .filters {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .filter-actions {
+      display: flex;
+      gap: 10px;
+      align-items: end;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th, td {
+      padding: 12px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    tr:hover td { background: rgba(255, 255, 255, 0.42); }
+
+    .mono {
+      font-family: var(--mono);
+      word-break: break-word;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 12px;
+    }
+
+    .timeline-item {
+      padding: 14px;
+      border-left: 3px solid var(--accent);
+      background: rgba(255, 255, 255, 0.55);
+      border-radius: 0 14px 14px 0;
+    }
+
+    .timeline-item pre {
+      margin: 10px 0 0;
+      padding: 10px;
+      border-radius: 10px;
+      background: rgba(23, 33, 43, 0.06);
+      overflow: auto;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .runtime-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .empty, .banner {
+      padding: 16px;
+      border: 1px dashed var(--line);
+      border-radius: 14px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.42);
+    }
+
+    .banner.error {
+      color: var(--danger);
+      border-color: rgba(178, 58, 44, 0.28);
+      background: rgba(178, 58, 44, 0.08);
+    }
+
+    .fade-in {
+      animation: rise 280ms ease-out;
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (max-width: 1080px) {
+      .hero, .two-up, .runtime-grid { grid-template-columns: 1fr; }
+      .controls, .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 720px) {
+      .shell { padding: 18px 12px 32px; }
+      .controls, .filters { grid-template-columns: 1fr; }
+      .status-bar { flex-direction: column; align-items: start; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <div class="panel hero-main fade-in">
+        <div class="eyebrow">Read-only control plane</div>
+        <h1>Synapse Ops Console</h1>
+        <p>Dashboard, request tracing, execution detail, and runtime capacity views built directly on top of the existing <span class="mono">/admin/*</span> APIs.</p>
+        <div class="status-bar">
+          <div id="service-status">Waiting for admin token and first fetch.</div>
+          <div id="clock" class="mono"></div>
+        </div>
+      </div>
+      <div class="panel hero-side fade-in">
+        <div class="controls">
+          <label>Bearer Token
+            <input id="token-input" type="password" placeholder="ops-token or tenant token">
+          </label>
+          <label>Tenant Filter
+            <input id="tenant-input" type="text" placeholder="optional tenant_id">
+          </label>
+          <label>Quick Request
+            <input id="request-search-input" type="text" placeholder="request_id">
+          </label>
+        </div>
+        <div class="filter-actions">
+          <button id="refresh-all-button">Refresh Console</button>
+          <button id="open-request-button" class="secondary">Open Request</button>
+          <button id="clear-token-button" class="ghost">Clear Token</button>
+        </div>
+        <div class="banner" id="connection-banner">Use a bearer token with access to <span class="mono">/admin/*</span>. The page stores it only in this browser tab.</div>
+      </div>
+    </section>
+
+    <nav class="tabs">
+      <button class="tab active" data-view="dashboard">Dashboard</button>
+      <button class="tab" data-view="requests">Requests</button>
+      <button class="tab" data-view="detail">Execution Detail</button>
+      <button class="tab" data-view="runtime">Runtime</button>
+    </nav>
+
+    <section id="dashboard-view" class="view active fade-in">
+      <div class="grid metric-grid" id="metric-grid"></div>
+      <div class="grid two-up" style="margin-top: 18px;">
+        <div class="panel section">
+          <h2>Alert Hints</h2>
+          <div id="alerts-list" class="alert-list"></div>
+        </div>
+        <div class="panel section">
+          <h2>Top Error Codes</h2>
+          <div id="error-codes-list" class="stack"></div>
+        </div>
+      </div>
+      <div class="panel section" style="margin-top: 18px;">
+        <h2>Recent Failures</h2>
+        <div id="recent-failures-list" class="summary-list"></div>
+      </div>
+    </section>
+
+    <section id="requests-view" class="view fade-in">
+      <div class="panel section">
+        <h2>Requests</h2>
+        <div class="filters">
+          <label>Request ID
+            <input id="filter-request-id" type="text">
+          </label>
+          <label>Status
+            <select id="filter-status">
+              <option value="">all</option>
+              <option value="success">success</option>
+              <option value="error">error</option>
+            </select>
+          </label>
+          <label>Error Code
+            <input id="filter-error-code" type="text">
+          </label>
+          <label>Language
+            <input id="filter-language" type="text" placeholder="python">
+          </label>
+          <label>Limit
+            <input id="filter-limit" type="number" min="1" max="200" value="50">
+          </label>
+        </div>
+        <div class="filter-actions" style="margin-bottom: 14px;">
+          <button id="apply-filters-button">Apply Filters</button>
+          <button id="reset-filters-button" class="secondary">Reset Filters</button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Request</th>
+              <th>Tenant</th>
+              <th>Status</th>
+              <th>Timing</th>
+              <th>Runtime</th>
+              <th>Flags</th>
+            </tr>
+          </thead>
+          <tbody id="requests-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="detail-view" class="view fade-in">
+      <div class="grid two-up">
+        <div class="panel section">
+          <h2>Request Summary</h2>
+          <div id="detail-summary"></div>
+        </div>
+        <div class="panel section">
+          <h2>Audit Timeline</h2>
+          <div class="filter-actions" style="margin-bottom: 14px;">
+            <button id="refresh-detail-button">Refresh Detail</button>
+            <button id="download-audit-button" class="secondary">Download Audit JSON</button>
+          </div>
+          <div id="detail-audit" class="timeline"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="runtime-view" class="view fade-in">
+      <div class="grid runtime-grid">
+        <div class="panel section">
+          <h2>Runtime Inventory</h2>
+          <div id="runtime-list" class="summary-list"></div>
+        </div>
+        <div class="panel section">
+          <h2>Capacity</h2>
+          <div id="capacity-list" class="stack"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const state = {
+      token: sessionStorage.getItem("synapse_ops_token") || "",
+      tenantId: "",
+      selectedRequestId: "",
+      lastAuditEnvelope: null,
+      requests: [],
+    };
+
+    const views = ["dashboard", "requests", "detail", "runtime"];
+    const metricKeys = [
+      ["success_total", "Success"],
+      ["error_total", "Errors"],
+      ["queued_total", "Queued"],
+      ["runtime_unavailable_total", "Runtime Down"],
+      ["capacity_rejected_total", "Capacity Rejected"],
+      ["queue_timeout_total", "Queue Timeouts"],
+      ["wall_timeout_total", "Wall Timeouts"],
+      ["quota_exceeded_total", "Quota Exceeded"],
+    ];
+
+    const el = (id) => document.getElementById(id);
+
+    function nowClock() {
+      el("clock").textContent = new Date().toLocaleString();
+    }
+
+    function setBanner(message, isError) {
+      const banner = el("connection-banner");
+      banner.textContent = message;
+      banner.className = isError ? "banner error" : "banner";
+    }
+
+    function setServiceStatus(message) {
+      el("service-status").textContent = message;
+    }
+
+    function authHeaders() {
+      const headers = {};
+      if (state.token) {
+        headers.authorization = "Bearer " + state.token;
+      }
+      return headers;
+    }
+
+    async function apiGet(path, params) {
+      const url = new URL(path, window.location.origin);
+      if (params) {
+        Object.entries(params).forEach(([key, value]) => {
+          if (value !== "" && value !== null && value !== undefined) {
+            url.searchParams.set(key, String(value));
+          }
+        });
+      }
+
+      const response = await fetch(url, {
+        headers: authHeaders(),
+      });
+
+      if (!response.ok) {
+        let detail = response.status + " " + response.statusText;
+        try {
+          const body = await response.json();
+          if (body.error && body.error.message) {
+            detail = body.error.message;
+          }
+        } catch (_) {}
+        throw new Error(detail);
+      }
+
+      return response.json();
+    }
+
+    function fmtTime(ms) {
+      if (!ms && ms !== 0) return "n/a";
+      return new Date(ms).toLocaleString();
+    }
+
+    function fmtDuration(ms) {
+      if (ms === null || ms === undefined) return "n/a";
+      return ms + " ms";
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function renderEmpty(message) {
+      return '<div class="empty">' + escapeHtml(message) + "</div>";
+    }
+
+    function selectView(view) {
+      views.forEach((name) => {
+        const panel = el(name + "-view");
+        const tab = document.querySelector('.tab[data-view="' + name + '"]');
+        const active = name === view;
+        panel.classList.toggle("active", active);
+        tab.classList.toggle("active", active);
+      });
+    }
+
+    function selectRequest(requestId) {
+      state.selectedRequestId = requestId || "";
+      if (state.selectedRequestId) {
+        window.location.hash = "#/request/" + encodeURIComponent(state.selectedRequestId);
+      } else {
+        window.location.hash = "#/detail";
+      }
+      selectView("detail");
+      void loadDetail();
+    }
+
+    function readFilters() {
+      return {
+        request_id: el("filter-request-id").value.trim(),
+        tenant_id: state.tenantId,
+        status: el("filter-status").value,
+        error_code: el("filter-error-code").value.trim(),
+        language: el("filter-language").value.trim(),
+        limit: el("filter-limit").value.trim(),
+      };
+    }
+
+    function writeRequests(items) {
+      state.requests = items;
+      const body = el("requests-body");
+      if (!items.length) {
+        body.innerHTML = '<tr><td colspan="6">' + renderEmpty("No matching requests.") + "</td></tr>";
+        return;
+      }
+
+      body.innerHTML = items.map((item) => {
+        const flags = [];
+        if (item.stdout_truncated) flags.push('<span class="pill">stdout truncated</span>');
+        if (item.stderr_truncated) flags.push('<span class="pill">stderr truncated</span>');
+        if (item.error_code) flags.push('<span class="pill error">' + escapeHtml(item.error_code) + "</span>");
+        return [
+          "<tr>",
+          '<td><button class="ghost mono" data-request-open="' + escapeHtml(item.request_id) + '">' + escapeHtml(item.request_id) + "</button></td>",
+          "<td>" + escapeHtml(item.tenant_id) + "</td>",
+          '<td><span class="pill ' + (item.status === "error" ? "error" : "success") + '">' + escapeHtml(item.status) + "</span></td>",
+          "<td>" + escapeHtml(fmtDuration(item.duration_ms)) + "<br><span class=\"kicker\">Queued " + escapeHtml(fmtDuration(item.queue_wait_ms)) + "</span></td>",
+          "<td>" + escapeHtml(item.runtime_language || item.language) + "<br><span class=\"kicker\">" + escapeHtml(item.runtime_version || "unknown") + "</span></td>",
+          "<td>" + (flags.join(" ") || '<span class="kicker">none</span>') + "</td>",
+          "</tr>"
+        ].join("");
+      }).join("");
+
+      body.querySelectorAll("[data-request-open]").forEach((button) => {
+        button.addEventListener("click", () => selectRequest(button.getAttribute("data-request-open")));
+      });
+    }
+
+    function writeOverview(overview) {
+      const metricGrid = el("metric-grid");
+      metricGrid.innerHTML = metricKeys.map(([key, label]) => [
+        '<div class="panel metric-card">',
+        '<p class="kicker">' + escapeHtml(label) + "</p>",
+        '<p class="metric-value">' + escapeHtml(overview.metrics[key] || 0) + "</p>",
+        "</div>"
+      ].join("")).join("");
+
+      el("alerts-list").innerHTML = overview.alerts.length
+        ? overview.alerts.map((alert) => [
+            '<div class="alert-item severity-' + escapeHtml(alert.severity) + '">',
+            '<div class="pill">' + escapeHtml(alert.severity) + "</div>",
+            "<strong>" + escapeHtml(alert.message) + "</strong>",
+            '<div class="meta"><span class="mono">' + escapeHtml(alert.code) + "</span><span>count " + escapeHtml(alert.count) + "</span></div>",
+            "</div>"
+          ].join(""))
+        : renderEmpty("No alert hints right now.");
+
+      el("error-codes-list").innerHTML = overview.top_error_codes.length
+        ? overview.top_error_codes.map((item) => '<div class="summary-item"><strong class="mono">' + escapeHtml(item.code) + '</strong><div class="meta"><span>count ' + escapeHtml(item.count) + "</span></div></div>").join("")
+        : renderEmpty("No recent error aggregation.");
+
+      el("recent-failures-list").innerHTML = overview.recent_failures.length
+        ? overview.recent_failures.map((item) => [
+            '<div class="summary-item">',
+            '<div class="filter-actions">',
+            '<button class="ghost mono" data-request-open="' + escapeHtml(item.request_id) + '">' + escapeHtml(item.request_id) + "</button>",
+            '<span class="pill error">' + escapeHtml(item.error_code || "unknown_error") + "</span>",
+            "</div>",
+            '<div class="meta"><span>tenant ' + escapeHtml(item.tenant_id) + "</span><span>" + escapeHtml(fmtTime(item.created_at_ms)) + "</span><span>duration " + escapeHtml(fmtDuration(item.duration_ms)) + "</span></div>",
+            "</div>"
+          ].join(""))
+        : renderEmpty("No recent failures in scope.");
+
+      el("recent-failures-list").querySelectorAll("[data-request-open]").forEach((button) => {
+        button.addEventListener("click", () => selectRequest(button.getAttribute("data-request-open")));
+      });
+
+      setServiceStatus(
+        "Service " +
+          overview.service.status +
+          " | version " +
+          overview.service.version +
+          " | started " +
+          fmtTime(overview.service.started_at_ms)
+      );
+    }
+
+    function writeDetail(summary, auditEnvelope) {
+      const detail = el("detail-summary");
+      if (!summary) {
+        detail.innerHTML = renderEmpty("Select a request from Dashboard or Requests.");
+        el("detail-audit").innerHTML = renderEmpty("Audit timeline will appear here.");
+        return;
+      }
+
+      const flags = [];
+      if (summary.error_code) flags.push('<span class="pill error">' + escapeHtml(summary.error_code) + "</span>");
+      if (summary.stdout_truncated) flags.push('<span class="pill">stdout truncated</span>');
+      if (summary.stderr_truncated) flags.push('<span class="pill">stderr truncated</span>');
+      detail.innerHTML = [
+        '<div class="summary-item">',
+        '<div class="meta"><span class="mono">' + escapeHtml(summary.request_id) + "</span></div>",
+        "<h3>" + escapeHtml(summary.status) + "</h3>",
+        '<div class="meta"><span>tenant ' + escapeHtml(summary.tenant_id) + "</span><span>language " + escapeHtml(summary.language) + "</span><span>runtime " + escapeHtml(summary.runtime_language || summary.language) + ":" + escapeHtml(summary.runtime_version || "unknown") + "</span></div>",
+        '<div class="meta"><span>created ' + escapeHtml(fmtTime(summary.created_at_ms)) + "</span><span>completed " + escapeHtml(fmtTime(summary.completed_at_ms)) + "</span></div>",
+        '<div class="meta"><span>duration ' + escapeHtml(fmtDuration(summary.duration_ms)) + "</span><span>queue wait " + escapeHtml(fmtDuration(summary.queue_wait_ms)) + "</span></div>",
+        '<div class="meta">' + (flags.join(" ") || '<span class="kicker">No truncation or error markers.</span>') + "</div>",
+        "</div>"
+      ].join("");
+
+      const audit = el("detail-audit");
+      if (!auditEnvelope || !auditEnvelope.events || !auditEnvelope.events.length) {
+        audit.innerHTML = renderEmpty("No audit events found.");
+        return;
+      }
+
+      audit.innerHTML = auditEnvelope.events.map((event) => [
+        '<div class="timeline-item">',
+        "<strong>" + escapeHtml(event.kind) + "</strong>",
+        '<div class="meta"><span>' + escapeHtml(fmtTime(event.timestamp_ms)) + "</span><span class=\"mono\">" + escapeHtml(event.request_id || summary.request_id) + "</span></div>",
+        event.message ? "<div>" + escapeHtml(event.message) + "</div>" : "",
+        event.fields && Object.keys(event.fields).length
+          ? "<pre>" + escapeHtml(JSON.stringify(event.fields, null, 2)) + "</pre>"
+          : "",
+        "</div>"
+      ].join("")).join("");
+    }
+
+    function writeRuntime(runtime, capacity) {
+      el("runtime-list").innerHTML = runtime.installed.length
+        ? runtime.installed.map((item) => [
+            '<div class="summary-item">',
+            "<strong>" + escapeHtml(item.language) + ":" + escapeHtml(item.version) + "</strong>",
+            '<div class="meta"><span class="pill ' + (item.active ? "success" : "") + '">' + (item.active ? "active" : "installed") + "</span><span class=\"pill\">" + escapeHtml(item.status) + "</span></div>",
+            '<div class="meta"><span class="mono">' + escapeHtml(item.command) + "</span><span class=\"mono\">" + escapeHtml(item.path) + "</span></div>",
+            "</div>"
+          ].join(""))
+        : renderEmpty("No runtime inventory available.");
+
+      el("capacity-list").innerHTML = [
+        summaryStat("Active", capacity.scheduler.active_total),
+        summaryStat("Queued", capacity.scheduler.queued_total),
+        summaryStat("Admitted", capacity.scheduler.admitted_total),
+        summaryStat("Rejected", capacity.scheduler.rejected_total),
+        summaryStat("Queue Timeouts", capacity.scheduler.queue_timeout_total),
+        summaryStat("Queue Wait Total", capacity.scheduler.queue_wait_time_ms_total + " ms"),
+        summaryStat("Max Concurrency", capacity.limits.max_concurrency),
+        summaryStat("Max Queue Depth", capacity.limits.max_queue_depth),
+        summaryStat("Max Queue Timeout", capacity.limits.max_queue_timeout_ms + " ms"),
+        summaryStat("Max Tenant Concurrency", capacity.limits.max_concurrent_executions_per_tenant),
+      ].join("");
+    }
+
+    function summaryStat(label, value) {
+      return '<div class="summary-item"><p class="kicker">' + escapeHtml(label) + '</p><p class="metric-value">' + escapeHtml(value) + "</p></div>";
+    }
+
+    async function loadOverview() {
+      const overview = await apiGet("/admin/overview", state.tenantId ? { tenant_id: state.tenantId } : null);
+      writeOverview(overview);
+    }
+
+    async function loadRequests() {
+      const response = await apiGet("/admin/requests", readFilters());
+      writeRequests(response.items || []);
+    }
+
+    async function loadDetail() {
+      if (!state.selectedRequestId) {
+        writeDetail(null, null);
+        return;
+      }
+      const [summary, auditEnvelope] = await Promise.all([
+        apiGet("/admin/requests/" + encodeURIComponent(state.selectedRequestId)),
+        apiGet("/admin/requests/" + encodeURIComponent(state.selectedRequestId) + "/audit"),
+      ]);
+      state.lastAuditEnvelope = auditEnvelope;
+      writeDetail(summary, auditEnvelope);
+    }
+
+    async function loadRuntime() {
+      const [runtime, capacity] = await Promise.all([
+        apiGet("/admin/runtime"),
+        apiGet("/admin/capacity"),
+      ]);
+      writeRuntime(runtime, capacity);
+    }
+
+    async function refreshVisible(view) {
+      if (!state.token) {
+        setBanner("Admin token required before loading protected routes.", false);
+        return;
+      }
+
+      try {
+        if (view === "dashboard") await loadOverview();
+        if (view === "requests") await loadRequests();
+        if (view === "detail") await loadDetail();
+        if (view === "runtime") await loadRuntime();
+        setBanner("Console data refreshed successfully.", false);
+      } catch (error) {
+        setBanner(String(error.message || error), true);
+      }
+    }
+
+    async function refreshAll() {
+      if (!state.token) {
+        setBanner("Admin token required before loading protected routes.", false);
+        return;
+      }
+
+      try {
+        await Promise.all([loadOverview(), loadRequests(), loadRuntime()]);
+        if (state.selectedRequestId) {
+          await loadDetail();
+        } else {
+          writeDetail(null, null);
+        }
+        setBanner("Dashboard, requests, detail, and runtime panels refreshed.", false);
+      } catch (error) {
+        setBanner(String(error.message || error), true);
+      }
+    }
+
+    function syncStateFromInputs() {
+      state.token = el("token-input").value.trim();
+      state.tenantId = el("tenant-input").value.trim();
+      sessionStorage.setItem("synapse_ops_token", state.token);
+    }
+
+    function parseHash() {
+      const hash = window.location.hash || "#/dashboard";
+      const requestPrefix = "#/request/";
+      if (hash.startsWith(requestPrefix)) {
+        state.selectedRequestId = decodeURIComponent(hash.slice(requestPrefix.length));
+        selectView("detail");
+        void refreshVisible("detail");
+        return;
+      }
+      const simple = hash.replace("#/", "");
+      if (views.includes(simple)) {
+        selectView(simple);
+        void refreshVisible(simple);
+        return;
+      }
+      selectView("dashboard");
+      void refreshVisible("dashboard");
+    }
+
+    function downloadAudit() {
+      if (!state.lastAuditEnvelope) {
+        setBanner("No audit payload loaded for export.", true);
+        return;
+      }
+      const blob = new Blob([JSON.stringify(state.lastAuditEnvelope, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = (state.selectedRequestId || "synapse-audit") + ".json";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    document.querySelectorAll(".tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        const view = tab.getAttribute("data-view");
+        window.location.hash = "#/" + view;
+      });
+    });
+
+    el("refresh-all-button").addEventListener("click", () => {
+      syncStateFromInputs();
+      void refreshAll();
+    });
+
+    el("open-request-button").addEventListener("click", () => {
+      syncStateFromInputs();
+      const value = el("request-search-input").value.trim();
+      if (!value) {
+        setBanner("Enter a request_id to open the execution detail page.", true);
+        return;
+      }
+      selectRequest(value);
+    });
+
+    el("clear-token-button").addEventListener("click", () => {
+      state.token = "";
+      sessionStorage.removeItem("synapse_ops_token");
+      el("token-input").value = "";
+      setBanner("Token cleared for this tab.", false);
+    });
+
+    el("apply-filters-button").addEventListener("click", () => {
+      syncStateFromInputs();
+      void loadRequests().catch((error) => setBanner(String(error.message || error), true));
+    });
+
+    el("reset-filters-button").addEventListener("click", () => {
+      ["filter-request-id", "filter-status", "filter-error-code", "filter-language"].forEach((id) => {
+        el(id).value = "";
+      });
+      el("filter-limit").value = "50";
+      void loadRequests().catch((error) => setBanner(String(error.message || error), true));
+    });
+
+    el("refresh-detail-button").addEventListener("click", () => {
+      syncStateFromInputs();
+      void loadDetail().catch((error) => setBanner(String(error.message || error), true));
+    });
+
+    el("download-audit-button").addEventListener("click", downloadAudit);
+
+    window.addEventListener("hashchange", parseHash);
+
+    el("token-input").value = state.token;
+    nowClock();
+    setInterval(nowClock, 1000);
+    parseHash();
+  </script>
+</body>
+</html>

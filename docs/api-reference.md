@@ -315,6 +315,17 @@ Common behavior:
 - wildcard tokens such as `*` may view global state
 - request ids must pass the same validation rules as `/execute`
 
+### GET /admin/console
+
+Return the embedded read-only operations console page.
+
+Behavior notes:
+
+- the page shell itself is public so a normal browser can load it first
+- the browser page calls `GET /admin/overview`, `GET /admin/requests`, `GET /admin/requests/:request_id`, `GET /admin/requests/:request_id/audit`, `GET /admin/runtime`, and `GET /admin/capacity`
+- those admin data routes still require `Authorization: Bearer <token>`
+- the bearer token is entered client-side and stored in `sessionStorage` for the current browser tab only
+
 ### GET /admin/overview
 
 Return dashboard data for the operations console.

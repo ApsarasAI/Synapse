@@ -29,6 +29,12 @@ cargo test --workspace
 scripts/quickstart_smoke.sh
 ```
 
+Optional browser-level admin console verification when Chrome and Node are available:
+
+```bash
+scripts/ops_console_smoke.sh
+```
+
 2. Confirm the README, Chinese mirror, quickstart, and API reference still match the release behavior.
 3. Tag the release as `vX.Y.Z`.
 4. Let GitHub Actions build the Linux artifact and checksum.

@@ -1234,6 +1234,28 @@ async fn admin_runtime_and_capacity_require_auth_and_return_payloads() {
     assert_eq!(capacity_body["limits"]["max_concurrency"], 2);
 }
 
+#[tokio::test]
+async fn admin_console_serves_embedded_console_page() {
+    let app = router_with_state(auth_test_state(1).unwrap());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/admin/console")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Synapse Ops Console"));
+    assert!(html.contains("Dashboard"));
+    assert!(html.contains("/admin/overview"));
+}
+
 fn json_request(uri: &str, payload: Value) -> Request<Body> {
     Request::builder()
         .method("POST")
