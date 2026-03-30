@@ -9,6 +9,12 @@ flowchart TB
     H[GET /health]
     M[GET /metrics]
     E[POST /execute]
+    AC[GET /admin/console]
+  end
+
+  subgraph CONSOLE[synapse-console]
+    HTML[admin_console.html\nops console UI]
+    LIB[lib.rs\nhtml export]
   end
 
   subgraph CORE[synapse-core]
@@ -29,6 +35,9 @@ flowchart TB
   SRV --> H
   SRV --> M
   SRV --> E
+  SRV --> AC
+  AC --> LIB
+  LIB --> HTML
   E --> P
   M --> P
   P --> X
@@ -40,4 +49,4 @@ flowchart TB
   X --> B
 
   classDef note fill:#f8f8f8,stroke:#bbb,color:#222;
-  class CLI,API,CORE,OS note;
+  class CLI,API,CONSOLE,CORE,OS note;

@@ -317,7 +317,7 @@ Common behavior:
 
 ### GET /admin/console
 
-Return the embedded read-only operations console page.
+Return the read-only operations console page served by the dedicated `synapse-console` crate.
 
 Behavior notes:
 

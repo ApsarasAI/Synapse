@@ -63,6 +63,7 @@ scripts/quickstart_smoke.sh
 Notes:
 
 - `scripts/quickstart_smoke.sh` verifies the documented quickstart path: runtime import, doctor, server startup, `health`, `execute`, `audits`, and `metrics`.
+- `SYNAPSE_RELEASE_RUN_OPS_CONSOLE_SMOKE=auto scripts/release_gate_v1.sh` adds the browser-level admin console smoke when Chrome/Node prerequisites are available.
 - If your host cannot satisfy Linux sandbox prerequisites, explain that in the PR and include the exact failing check.
 
 ## Documentation Expectations

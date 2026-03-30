@@ -16,7 +16,12 @@ def _write_executable(path: pathlib.Path, content: str) -> None:
 
 
 class ReleaseGateV1Tests(unittest.TestCase):
-    def _run_gate(self, *, enable_perf_gate: bool) -> subprocess.CompletedProcess[str]:
+    def _run_gate(
+        self,
+        *,
+        enable_perf_gate: bool,
+        run_ops_console_smoke: str = "0",
+    ):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = pathlib.Path(tmp_dir)
             log_path = tmp_path / "calls.log"
@@ -24,6 +29,7 @@ class ReleaseGateV1Tests(unittest.TestCase):
             cargo_stub = tmp_path / "cargo-stub.sh"
             python_stub = tmp_path / "python-stub.sh"
             quickstart_stub = tmp_path / "quickstart-smoke.sh"
+            ops_console_stub = tmp_path / "ops-console-smoke.sh"
             pr_review_stub = tmp_path / "pr-review-smoke.sh"
             perf_stub = tmp_path / "perf-gate.sh"
 
@@ -58,6 +64,16 @@ class ReleaseGateV1Tests(unittest.TestCase):
                 ),
             )
             _write_executable(
+                ops_console_stub,
+                textwrap.dedent(
+                    f"""\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    printf 'ops_console\\n' >> "{log_path}"
+                    """
+                ),
+            )
+            _write_executable(
                 pr_review_stub,
                 textwrap.dedent(
                     f"""\
@@ -82,16 +98,19 @@ class ReleaseGateV1Tests(unittest.TestCase):
             env["SYNAPSE_CARGO_BIN"] = str(cargo_stub)
             env["SYNAPSE_PYTHON_BIN"] = str(python_stub)
             env["SYNAPSE_QUICKSTART_SMOKE_SCRIPT"] = str(quickstart_stub)
+            env["SYNAPSE_OPS_CONSOLE_SMOKE_SCRIPT"] = str(ops_console_stub)
             env["SYNAPSE_PR_REVIEW_DEMO_SMOKE_SCRIPT"] = str(pr_review_stub)
             env["SYNAPSE_PERF_GATE_SCRIPT"] = str(perf_stub)
             env["SYNAPSE_RELEASE_RUN_PERF_GATE"] = "1" if enable_perf_gate else "0"
+            env["SYNAPSE_RELEASE_RUN_OPS_CONSOLE_SMOKE"] = run_ops_console_smoke
 
             result = subprocess.run(
                 ["bash", str(SCRIPT)],
                 cwd=REPO_ROOT,
                 env=env,
-                text=True,
-                capture_output=True,
+                universal_newlines=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 check=False,
             )
             result.log = log_path.read_text() if log_path.exists() else ""
@@ -108,6 +127,7 @@ class ReleaseGateV1Tests(unittest.TestCase):
         self.assertIn("python:-m unittest discover -s sdk/python/tests", result.log)
         self.assertIn("quickstart", result.log)
         self.assertIn("pr_review", result.log)
+        self.assertNotIn("ops_console", result.log)
         self.assertNotIn("perf", result.log)
 
     def test_release_gate_runs_perf_gate_when_enabled(self):
@@ -116,6 +136,19 @@ class ReleaseGateV1Tests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn("[v1-gate] perf gate", result.stdout)
         self.assertIn("perf", result.log)
+
+    def test_release_gate_runs_ops_console_smoke_when_enabled(self):
+        result = self._run_gate(enable_perf_gate=False, run_ops_console_smoke="1")
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("[v1-gate] ops console smoke", result.stdout)
+        self.assertIn("ops_console", result.log)
+
+    def test_release_gate_rejects_invalid_ops_console_toggle(self):
+        result = self._run_gate(enable_perf_gate=False, run_ops_console_smoke="sometimes")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("invalid SYNAPSE_RELEASE_RUN_OPS_CONSOLE_SMOKE value", result.stderr)
 
 
 if __name__ == "__main__":

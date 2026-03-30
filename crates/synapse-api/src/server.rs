@@ -12,6 +12,7 @@ use axum::{
     Extension, Router,
 };
 use serde::{Deserialize, Serialize};
+use synapse_console::admin_console_html;
 use synapse_core::{
     audit_event, new_request_id, validate_request_id, AuditEvent, AuditEventKind, ExecuteRequest,
     ExecuteResponse, RequestStatus, RequestSummary, RequestSummaryQuery, SynapseError,
@@ -22,7 +23,6 @@ use tracing::{error, info, instrument};
 
 pub use crate::app::AppState;
 use crate::{
-    admin_console,
     app::{default_state, AuthPrincipal},
     metrics::ExecutionLifecycle,
 };
@@ -331,7 +331,7 @@ async fn admin_overview(
 }
 
 async fn admin_console_page(_state: State<AppState>) -> impl IntoResponse {
-    admin_console::page()
+    axum::response::Html(admin_console_html())
 }
 
 async fn admin_list_requests(

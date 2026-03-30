@@ -4,6 +4,7 @@ members = [
     "crates/synapse-core",
     "crates/synapse-api",
     "crates/synapse-cli",
+    "crates/synapse-console",
 ]
 
 [workspace.package]

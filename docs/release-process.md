@@ -35,6 +35,13 @@ Optional browser-level admin console verification when Chrome and Node are avail
 scripts/ops_console_smoke.sh
 ```
 
+The consolidated release gate can also run this check automatically when prerequisites are present, or force it explicitly:
+
+```bash
+SYNAPSE_RELEASE_RUN_OPS_CONSOLE_SMOKE=auto scripts/release_gate_v1.sh
+SYNAPSE_RELEASE_RUN_OPS_CONSOLE_SMOKE=1 scripts/release_gate_v1.sh
+```
+
 2. Confirm the README, Chinese mirror, quickstart, and API reference still match the release behavior.
 3. Tag the release as `vX.Y.Z`.
 4. Let GitHub Actions build the Linux artifact and checksum.

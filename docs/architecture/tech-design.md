@@ -7,8 +7,8 @@
 
 ## 当前实现校准
 
-- 当前仓库只实现了 `synapse-core`、`synapse-api`、`synapse-cli` 三个 crate。
-- 已实现的 HTTP 路由只有 `GET /health`、`GET /metrics`、`POST /execute`。
+- 当前仓库已实现 `synapse-core`、`synapse-api`、`synapse-cli`、`synapse-console` 四个 crate。
+- 已实现的 HTTP 路由已包含 `GET /health`、`GET /metrics`、`POST /execute`，以及只读 admin 控制台与查询接口。
 - 当前没有 `websocket.rs`、`middleware/`、`runtime/`、`cgroups/`、`filesystem/`、`synapse-enterprise`。
 - 当前执行路径以 Python 为唯一语言；`RuntimeManager`、`Synapsefile`、多语言支持仍属于规划。
 - Linux 执行必须依赖 `bwrap`；当前实现不再静默降级到 `unshare`。

@@ -3,9 +3,9 @@
 
 ## 项目类型
 - Rust workspace
-- 3 个 crate：`synapse-core`、`synapse-api`、`synapse-cli`
+- 4 个 crate：`synapse-core`、`synapse-api`、`synapse-cli`、`synapse-console`
 - 典型形态：单应用后端 + CLI 包装器
-- 无前端子系统
+- 前端控制台采用独立 crate 承载静态页面资源
 
 ## 当前模块边界
 ```text
@@ -16,6 +16,10 @@ synapse-cli
 synapse-api
   -> app.rs       AppState 与默认装配
   -> server.rs    路由、状态注入、HTTP 映射
+
+synapse-console
+  -> lib.rs       控制台 HTML 导出接口
+  -> admin_console.html 单文件控制台页面
 
 synapse-core
   -> types.rs     请求/响应纯数据结构
@@ -74,6 +78,8 @@ Client
 - `crates/synapse-cli/src/doctor.rs`：统一 provider 驱动的运行环境检查
 - `crates/synapse-api/src/app.rs`：API 默认状态与池装配
 - `crates/synapse-api/src/server.rs`：HTTP 路由、状态注入、错误映射、metrics 输出
+- `crates/synapse-console/src/lib.rs`：控制台静态资源导出
+- `crates/synapse-console/src/admin_console.html`：运维控制台单文件页面
 - `crates/synapse-core/src/service.rs`：请求校验、语言解析、执行编排
 - `crates/synapse-core/src/runtime.rs`：沙箱目录、脚本写入、进程执行、超时与平台策略
 - `crates/synapse-core/src/pool.rs`：池化复用、租约回收、指标统计
@@ -81,7 +87,8 @@ Client
 
 ## 服务边界
 - `synapse-cli`：命令解析、启动入口、doctor 检查触发；不承载核心执行规则
-- `synapse-api`：HTTP 接口、状态注入、错误映射、metrics；不承载平台探测与业务决策
+- `synapse-api`：HTTP 接口、状态注入、错误映射、控制台页面路由；不承载平台探测与业务决策
+- `synapse-console`：只读运维控制台静态资源；不承载后端状态与数据查询逻辑
 - `synapse-core`：配置、providers、执行编排、运行时、安全隔离、响应模型
 
 ## 架构要求

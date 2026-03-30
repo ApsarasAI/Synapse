@@ -1241,6 +1241,7 @@ dependencies = [
  "futures-util",
  "serde",
  "serde_json",
+ "synapse-console",
  "synapse-core",
  "tokio",
  "tokio-tungstenite",
@@ -1261,6 +1262,10 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
 ]
+
+[[package]]
+name = "synapse-console"
+version = "0.1.0"
 
 [[package]]
 name = "synapse-core"

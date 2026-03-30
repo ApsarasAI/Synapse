@@ -20,6 +20,7 @@
 ## 工作区内部依赖
 ```
 synapse-cli -> synapse-api -> synapse-core
+synapse-api -> synapse-console
 synapse-api  -> synapse-core
 ```
 
